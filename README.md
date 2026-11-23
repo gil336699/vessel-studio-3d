@@ -13,9 +13,9 @@ It is the 3D companion of [Vessel Studio](https://github.com/gil336699/vessel-st
 
 **Use it online:** https://gil336699.github.io/vessel-studio-3d/
 
-![Vessel Studio 3D in use: vessels grow through a see-through kidney from the dent where they enter; the Surface vessels preset grows vessels over a heart; Two interwoven grows a red and a purple system through the same lens without touching; and the veins are exported as a watertight STL to print.](docs/demo.gif)
+![Vessel Studio 3D in use: Speed is set to 1, and vessels grow through a see-through kidney from the dent where they enter; Inlet to outlet grows a red and a purple tree from the two ends of a lens until they meet and join; Surface vessels grow over a heart; Gil's woven vase, weave.stl, is opened and vessels grow over its surface; and the veins are exported as a watertight STL of 1,168,784 triangles. Growth plays at the app's real speed for Speed 1, about 60 steps a second.](docs/demo.gif)
 
-[Watch the demo as a video](https://github.com/gil336699/vessel-studio-3d/releases/download/v1.0.0/vessel-studio-3d-demo.mp4) (MP4, 1920 × 1080).
+[Watch the demo as a video](https://github.com/gil336699/vessel-studio-3d/releases/download/v1.0.0/vessel-studio-3d-demo.mp4) (MP4, 1920 × 1080, 29 seconds).
 
 ![The eight presets, grown in the app: Organ vessels fill a kidney from its dent; Tree climbs a trunk into its crown; Coral wanders through a ball; Surface vessels run over a heart; Lattice joins into a net over a vase; Roots round a pot grow down from the rim; Inlet to outlet joins a red and a purple tree inside a lens, with the joins in yellow; Two interwoven fills the same lens with two systems that never touch.](docs/presets.png)
 
@@ -245,13 +245,13 @@ Gil's STL files, each opened in the app and grown with Organ vessels (inside) an
 
 | Model | Triangles | Size | Preparing to grow inside | Inside: vein points, attractors left | On the surface: vein points, attractors left |
 | --- | --- | --- | --- | --- | --- |
-| weave.stl, open | 1,752 | 90 × 90 × 90 mm | 1.8 s | 12,140, 21 of 3,000 | 5,904, 4 of 3,000 |
+| weave.stl, open | 1,752 | 90 × 90 × 90 mm | 2.0 s | 12,140, 21 of 3,000 | 5,904, 4 of 3,000 |
 | nih-brain.stl | 250,000 | 169 × 133 × 139 mm | 2.1 s | 7,835, 212 of 3,000 | 9,601, 776 of 3,000 |
-| ZuluTag_v3.stl | 3,002 | 47 × 7 × 29 mm | 0.5 s | 2,317, 589 of 3,000 | 5,644, 169 of 3,000 |
-| springpot.stl | 6,882 | 120 × 120 × 122 mm | 2.6 s | 486, 1,725 of 3,000 | 6,278, 1,707 of 3,000 |
+| ZuluTag_v3.stl | 3,002 | 47 × 7 × 29 mm | 0.7 s | 2,317, 589 of 3,000 | 5,644, 169 of 3,000 |
+| springpot.stl | 6,882 | 120 × 120 × 122 mm | 3.3 s | 486, 1,725 of 3,000 | 6,278, 1,707 of 3,000 |
 | Untitled.stl, open | 181,364 | 28 × 33 × 4 mm | 0.7 s | No room for a root | 3, 2,994 of 3,000 |
 
-Preparing a model to grow on the surface took 0.46 s for the brain and 0.34 s for Untitled.stl.
+Preparing to grow inside includes placing the attractors. Preparing to grow on the surface took 0.44 s for the brain and 0.76 s for Untitled.stl.
 
 - **Folds.** On the brain's surface the veins cover the tops of the folds and leave most of the narrow valleys between them: 776 of 3,000 attractors are left.
 - **Thin walls.** Inside fills only what is at least the edge clearance from the wall. The springpot's deepest point is 3.4 mm under its skin, so Inside grew 486 vein points and left 1,725 of 3,000 attractors.
