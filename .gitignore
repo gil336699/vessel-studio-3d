@@ -1,0 +1,24 @@
+node_modules/
+dist/
+coverage/
+.DS_Store
+*.log
+.env
+.env.*
+.claude/
+
+# Files people make with the app
+*.vessel3d.json
+!test-fixtures/*.vessel3d.json
+*.stl
+!test-fixtures/*.stl
+*.3mf
+*.obj
+*.png
+!public/*.png
+!docs/*.png
+*.svg
+!public/*.svg
+
+# Local test models, QA scripts, probes and recordings (kept out of git)
+local/

@@ -1,0 +1,346 @@
+// The Surface domain: veins grow across a model's skin and stay on it, like vessels over a heart or roots round a pot.
+//
+// A growth step keeps only the part of its heading along the surface (the part along the normal is removed), then the
+// new point is snapped onto the mesh with three-mesh-bvh's closestPointToPoint. A step is refused when the snap lands
+// on a sheet facing the other way (it jumped across a thin wall or a gap), when it hardly moves (stuck at a rim), or
+// when it comes nearer an open rim than the edge clearance. An attractor pulls only veins whose normal doesn't face
+// away from its own, so veins never pair across a thin wall or a narrow gap.
+import { BufferAttribute, BufferGeometry, Vector3 } from 'three'
+import { MeshBVH, type HitPointInfo } from 'three-mesh-bvh'
+import { meshBounds, openEdges, rimLoops, type MeshData, type Vec3 } from '../lib/mesh'
+import type { Domain } from './domain'
+import { Rng } from './random'
+
+// A step whose landing normal turns more than about 105° from where it started has crossed to another sheet.
+const STEP_TURN = -0.25
+// An attractor pulls a vein only if their normals are within 120°: thin walls and narrow gaps face about 180° apart.
+const SIGHT = -0.5
+// Loop joins only between points facing nearly the same way.
+const JOIN = 0.2
+// Faces within this angle share their normals at a corner; sharper edges, such as a box's, keep each face's own.
+const CREASE = Math.cos(Math.PI / 3)
+
+export class SurfaceDomain implements Domain {
+  readonly kind = 'surface'
+  readonly span: number
+  readonly centre: readonly [number, number, number]
+  readonly area: number
+  readonly positions: Float32Array
+  // The triangle corners in the BVH's own order, which its face indices refer to.
+  readonly indices: Uint32Array
+  // A normal for each triangle corner, blended across smooth edges only.
+  readonly cornerNormals: Float32Array
+  readonly faceArea: Float64Array
+  // Open rims as segments, [ax, ay, az, bx, by, bz] each, and loops of vertices.
+  readonly rimSegments: Float64Array
+  readonly rims: number[][]
+  private bvh: MeshBVH
+  private hit: HitPointInfo = { point: new Vector3(), distance: 0, faceIndex: 0 }
+  private probe = new Vector3()
+  private snapped = new Float64Array(6)
+  private rimGrid: Map<number, number[]>
+  private rimCell: number
+
+  constructor(mesh: MeshData) {
+    const geometry = new BufferGeometry()
+    geometry.setAttribute('position', new BufferAttribute(mesh.positions, 3))
+    geometry.setIndex(new BufferAttribute(mesh.indices.slice(), 1))
+    // The BVH reorders the triangles; everything below uses its order.
+    this.bvh = new MeshBVH(geometry)
+    this.positions = mesh.positions
+    this.indices = geometry.index!.array as Uint32Array
+    const P = this.positions, I = this.indices
+    const faces = I.length / 3
+    // Face normals and areas.
+    const FN = new Float64Array(faces * 3)
+    this.faceArea = new Float64Array(faces)
+    let area = 0
+    for (let f = 0; f < faces; f++) {
+      const a = I[f * 3] * 3, b = I[f * 3 + 1] * 3, c = I[f * 3 + 2] * 3
+      const ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], uz = P[b + 2] - P[a + 2]
+      const vx = P[c] - P[a], vy = P[c + 1] - P[a + 1], vz = P[c + 2] - P[a + 2]
+      const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx, L = Math.hypot(nx, ny, nz)
+      this.faceArea[f] = L / 2; area += L / 2
+      if (L > 0) { FN[f * 3] = nx / L; FN[f * 3 + 1] = ny / L; FN[f * 3 + 2] = nz / L }
+    }
+    this.area = area
+    // Corner normals: each corner blends the faces round its vertex that are within the crease angle of its own face.
+    const vertices = P.length / 3
+    const start = new Uint32Array(vertices + 1)
+    for (let i = 0; i < I.length; i++) start[I[i] + 1]++
+    for (let v = 0; v < vertices; v++) start[v + 1] += start[v]
+    const around = new Uint32Array(I.length), fill = start.slice(0, vertices)
+    for (let i = 0; i < I.length; i++) around[fill[I[i]]++] = Math.floor(i / 3)
+    this.cornerNormals = new Float32Array(I.length * 3)
+    for (let f = 0; f < faces; f++) for (let j = 0; j < 3; j++) {
+      const v = I[f * 3 + j]
+      let sx = 0, sy = 0, sz = 0
+      for (let k = start[v]; k < start[v + 1]; k++) {
+        const g = around[k]
+        if (FN[g * 3] * FN[f * 3] + FN[g * 3 + 1] * FN[f * 3 + 1] + FN[g * 3 + 2] * FN[f * 3 + 2] < CREASE) continue
+        const w = this.faceArea[g]
+        sx += FN[g * 3] * w; sy += FN[g * 3 + 1] * w; sz += FN[g * 3 + 2] * w
+      }
+      const L = Math.hypot(sx, sy, sz)
+      const o = (f * 3 + j) * 3
+      if (L > 0) { this.cornerNormals[o] = sx / L; this.cornerNormals[o + 1] = sy / L; this.cornerNormals[o + 2] = sz / L }
+      else { this.cornerNormals[o] = FN[f * 3]; this.cornerNormals[o + 1] = FN[f * 3 + 1]; this.cornerNormals[o + 2] = FN[f * 3 + 2] }
+    }
+    const { lo, hi } = meshBounds(P)
+    this.span = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2])
+    this.centre = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2]
+    // Open rims.
+    const edges = openEdges(I)
+    this.rims = rimLoops(edges, P)
+    this.rimSegments = new Float64Array(edges.length * 3)
+    for (let e = 0; e < edges.length; e += 2) {
+      const a = edges[e] * 3, b = edges[e + 1] * 3
+      this.rimSegments.set([P[a], P[a + 1], P[a + 2], P[b], P[b + 1], P[b + 2]], e * 3)
+    }
+    let longest = 0
+    for (let s = 0; s < this.rimSegments.length; s += 6) {
+      const r = this.rimSegments
+      longest = Math.max(longest, Math.hypot(r[s + 3] - r[s], r[s + 4] - r[s + 1], r[s + 5] - r[s + 2]))
+    }
+    this.rimCell = Math.max(longest, this.span / 200, 1e-6)
+    this.rimGrid = new Map()
+    for (let s = 0; s < this.rimSegments.length / 6; s++) {
+      const r = this.rimSegments, o = s * 6
+      const k = this.rimKey(Math.floor((r[o] + r[o + 3]) / 2 / this.rimCell), Math.floor((r[o + 1] + r[o + 4]) / 2 / this.rimCell), Math.floor((r[o + 2] + r[o + 5]) / 2 / this.rimCell))
+      const list = this.rimGrid.get(k)
+      if (list) list.push(s); else this.rimGrid.set(k, [s])
+    }
+  }
+
+  get open() { return this.rimSegments.length > 0 }
+
+  private rimKey(i: number, j: number, k: number) { return ((i + 32768) * 65536 + (j + 32768)) * 65536 + (k + 32768) }
+
+  // Distance from a point to the nearest open rim, or Infinity when none is within `limit`.
+  rimDistance(x: number, y: number, z: number, limit: number): number {
+    if (!this.rimSegments.length) return Infinity
+    const c = this.rimCell, r = this.rimSegments
+    // Each segment sits in the cell of its midpoint, so look one cell further.
+    const reach = Math.ceil(limit / c) + 1
+    const ci = Math.floor(x / c), cj = Math.floor(y / c), ck = Math.floor(z / c)
+    let best = Infinity
+    for (let i = ci - reach; i <= ci + reach; i++) for (let j = cj - reach; j <= cj + reach; j++) for (let k = ck - reach; k <= ck + reach; k++) {
+      const list = this.rimGrid.get(this.rimKey(i, j, k))
+      if (!list) continue
+      for (const s of list) {
+        const o = s * 6
+        const ex = r[o + 3] - r[o], ey = r[o + 4] - r[o + 1], ez = r[o + 5] - r[o + 2]
+        const L2 = ex * ex + ey * ey + ez * ez
+        let t = L2 > 0 ? ((x - r[o]) * ex + (y - r[o + 1]) * ey + (z - r[o + 2]) * ez) / L2 : 0
+        t = Math.max(0, Math.min(1, t))
+        const d = Math.hypot(x - r[o] - ex * t, y - r[o + 1] - ey * t, z - r[o + 2] - ez * t)
+        if (d < best) best = d
+      }
+    }
+    return best <= limit ? best : Infinity
+  }
+
+  // The nearest point on the mesh and its blended normal, written to out as [x, y, z, nx, ny, nz]. False when there is
+  // no surface within maxDistance.
+  snap(x: number, y: number, z: number, out: Float64Array, maxDistance = Infinity): boolean {
+    const hit = this.bvh.closestPointToPoint(this.probe.set(x, y, z), this.hit, 0, maxDistance)
+    if (!hit) return false
+    const f = hit.faceIndex, P = this.positions, I = this.indices
+    const qx = hit.point.x, qy = hit.point.y, qz = hit.point.z
+    // Barycentric weights of the hit point in its triangle.
+    const a = I[f * 3] * 3, b = I[f * 3 + 1] * 3, c = I[f * 3 + 2] * 3
+    const v0x = P[b] - P[a], v0y = P[b + 1] - P[a + 1], v0z = P[b + 2] - P[a + 2]
+    const v1x = P[c] - P[a], v1y = P[c + 1] - P[a + 1], v1z = P[c + 2] - P[a + 2]
+    const v2x = qx - P[a], v2y = qy - P[a + 1], v2z = qz - P[a + 2]
+    const d00 = v0x * v0x + v0y * v0y + v0z * v0z, d01 = v0x * v1x + v0y * v1y + v0z * v1z, d11 = v1x * v1x + v1y * v1y + v1z * v1z
+    const d20 = v2x * v0x + v2y * v0y + v2z * v0z, d21 = v2x * v1x + v2y * v1y + v2z * v1z
+    const den = d00 * d11 - d01 * d01
+    let w1 = den ? (d11 * d20 - d01 * d21) / den : 0, w2 = den ? (d00 * d21 - d01 * d20) / den : 0
+    w1 = Math.max(0, Math.min(1, w1)); w2 = Math.max(0, Math.min(1 - w1, w2))
+    const w0 = 1 - w1 - w2
+    const N = this.cornerNormals, o = f * 9
+    const nx = w0 * N[o] + w1 * N[o + 3] + w2 * N[o + 6]
+    const ny = w0 * N[o + 1] + w1 * N[o + 4] + w2 * N[o + 7]
+    const nz = w0 * N[o + 2] + w1 * N[o + 5] + w2 * N[o + 8]
+    const L = Math.hypot(nx, ny, nz) || 1
+    out[0] = qx; out[1] = qy; out[2] = qz; out[3] = nx / L; out[4] = ny / L; out[5] = nz / L
+    return true
+  }
+
+  step(px: number, py: number, pz: number, pnx: number, pny: number, pnz: number,
+    hx: number, hy: number, hz: number, length: number, clear: number, out: Float64Array): boolean {
+    // Keep only the part of the heading along the surface.
+    const along = hx * pnx + hy * pny + hz * pnz
+    let tx = hx - along * pnx, ty = hy - along * pny, tz = hz - along * pnz
+    const T = Math.hypot(tx, ty, tz)
+    if (!(T > 1e-6)) return false
+    tx /= T; ty /= T; tz /= T
+    const s = this.snapped
+    if (!this.snap(px + tx * length, py + ty * length, pz + tz * length, s, 2 * length)) return false
+    // On a curve the snap lands a little short: aim again along the chord, a full segment.
+    let dx = s[0] - px, dy = s[1] - py, dz = s[2] - pz
+    let d = Math.hypot(dx, dy, dz)
+    if (!(d > 0.25 * length)) return false
+    if (!this.snap(px + (dx / d) * length, py + (dy / d) * length, pz + (dz / d) * length, s, 2 * length)) return false
+    dx = s[0] - px; dy = s[1] - py; dz = s[2] - pz
+    d = Math.hypot(dx, dy, dz)
+    if (!(d > 0.25 * length)) return false
+    if (s[3] * pnx + s[4] * pny + s[5] * pnz < STEP_TURN) return false
+    if (clear > 0 && this.rimDistance(s[0], s[1], s[2], clear) < clear) return false
+    out.set(s)
+    return true
+  }
+
+  sees(_px: number, _py: number, _pz: number, pnx: number, pny: number, pnz: number,
+    _ax: number, _ay: number, _az: number, anx: number, any: number, anz: number, _clear = 0): boolean {
+    return pnx * anx + pny * any + pnz * anz >= SIGHT
+  }
+
+  joins(_px: number, _py: number, _pz: number, pnx: number, pny: number, pnz: number,
+    ax: number, ay: number, az: number, anx: number, any: number, anz: number, clear: number): boolean {
+    if (pnx * anx + pny * any + pnz * anz < JOIN) return false
+    return !(clear > 0) || this.rimDistance(ax, ay, az, clear) >= clear
+  }
+
+  // A root for a click on the skin, snapped onto it, with its normal. Null when it is nearer a rim than the clearance.
+  root(point: Vec3, clearance: number): { at: Vec3; normal: Vec3 } | null {
+    const s = new Float64Array(6)
+    if (!this.snap(point[0], point[1], point[2], s)) return null
+    if (clearance > 0 && this.rimDistance(s[0], s[1], s[2], clearance) < clearance) return null
+    return { at: [s[0], s[1], s[2]], normal: [s[3], s[4], s[5]] }
+  }
+
+  // Roots spread evenly along the longest open rim, `count` of them, each moved onto the surface `inset` from the rim.
+  rimRoots(count: number, inset: number): { at: Vec3; normal: Vec3 }[] {
+    const loop = this.rims[0]
+    if (!loop || count < 1) return []
+    const P = this.positions
+    const pts = loop.map(v => [P[v * 3], P[v * 3 + 1], P[v * 3 + 2]] as Vec3)
+    const lengths = [0]
+    for (let k = 0; k < pts.length; k++) {
+      const a = pts[k], b = pts[(k + 1) % pts.length]
+      lengths.push(lengths[k] + Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]))
+    }
+    const total = lengths[lengths.length - 1]
+    const out: { at: Vec3; normal: Vec3 }[] = []
+    const s = new Float64Array(6)
+    for (let r = 0; r < count; r++) {
+      const at = ((r + 0.5) / count) * total
+      let k = 0
+      while (k < pts.length - 1 && lengths[k + 1] < at) k++
+      const a = pts[k], b = pts[(k + 1) % pts.length], t = (at - lengths[k]) / Math.max(1e-12, lengths[k + 1] - lengths[k])
+      const p: Vec3 = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
+      if (!this.snap(p[0], p[1], p[2], s)) continue
+      // Inward across the surface: perpendicular to the rim and to the normal, toward the side the surface lies on.
+      const ex = b[0] - a[0], ey = b[1] - a[1], ez = b[2] - a[2]
+      let ix = s[4] * ez - s[5] * ey, iy = s[5] * ex - s[3] * ez, iz = s[3] * ey - s[4] * ex
+      const L = Math.hypot(ix, iy, iz) || 1
+      ix /= L; iy /= L; iz /= L
+      const d = Math.max(inset, 1e-3)
+      const q = new Float64Array(6), q2 = new Float64Array(6)
+      const okA = this.snap(p[0] + ix * d, p[1] + iy * d, p[2] + iz * d, q)
+      const okB = this.snap(p[0] - ix * d, p[1] - iy * d, p[2] - iz * d, q2)
+      // The side whose snap stays farther from the rim is the surface's side.
+      const fa = okA ? this.rimDistance(q[0], q[1], q[2], 4 * d) : -1
+      const fb = okB ? this.rimDistance(q2[0], q2[1], q2[2], 4 * d) : -1
+      const pick = (fa === Infinity ? 1e9 : fa) >= (fb === Infinity ? 1e9 : fb) ? q : q2
+      if (!okA && !okB) continue
+      out.push({ at: [pick[0], pick[1], pick[2]], normal: [pick[3], pick[4], pick[5]] })
+    }
+    return out
+  }
+}
+
+export type SurfacePlacement = 'even' | 'random' | 'painted'
+export type SurfaceScatter = { count: number; placement: SurfacePlacement; seed: number; clearance: number; density?: Float32Array | null }
+
+const CANDIDATES = 12
+
+// Where the attractors go on the skin: spread by area, so big triangles get more. Even uses Mitchell's best candidate
+// (blue noise, exact count); Random is uniform; Painted follows a density painted on the model's vertices, 0–1. No
+// attractor is nearer an open rim than the clearance. The same seed always gives the same points.
+export function scatterSurface(dom: SurfaceDomain, o: SurfaceScatter): { p: Float64Array; n: Float64Array; short: boolean } {
+  const want = Math.max(0, Math.floor(o.count))
+  const P = dom.positions, I = dom.indices, faces = I.length / 3
+  const painted = o.placement === 'painted' && o.density ? o.density : null
+  // Each face's weight: its area, times its painted density.
+  const cdf = new Float64Array(faces + 1)
+  for (let f = 0; f < faces; f++) {
+    let w = dom.faceArea[f]
+    if (painted) w *= Math.max(0, (painted[I[f * 3]] + painted[I[f * 3 + 1]] + painted[I[f * 3 + 2]]) / 3)
+    cdf[f + 1] = cdf[f] + w
+  }
+  const total = cdf[faces]
+  if (want === 0 || !(total > 0)) return { p: new Float64Array(0), n: new Float64Array(0), short: want > 0 }
+  const rng = new Rng(o.seed)
+  const clear = Math.max(0, o.clearance)
+  // The spacing the attractors would have if spread evenly over the weighted area.
+  const spacing = Math.sqrt(total / want)
+  const reach = 1.5 * spacing
+  const { lo, hi } = meshBounds(P)
+  const cell = Math.max(reach, Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) / 400)
+  const gx = Math.ceil((hi[0] - lo[0]) / cell) + 1, gy = Math.ceil((hi[1] - lo[1]) / cell) + 1, gz = Math.ceil((hi[2] - lo[2]) / cell) + 1
+  const headOf = new Int32Array(gx * gy * gz).fill(-1)
+  const next = new Int32Array(want)
+  const out = new Float64Array(want * 3), normals = new Float64Array(want * 3)
+  let placed = 0
+  const cellIndex = (x: number, y: number, z: number) => {
+    const i = Math.min(gx - 1, Math.max(0, Math.floor((x - lo[0]) / cell)))
+    const j = Math.min(gy - 1, Math.max(0, Math.floor((y - lo[1]) / cell)))
+    const k = Math.min(gz - 1, Math.max(0, Math.floor((z - lo[2]) / cell)))
+    return [i, j, k]
+  }
+  const nearest = (x: number, y: number, z: number) => {
+    let best = reach * reach
+    const [ci, cj, ck] = cellIndex(x, y, z)
+    for (let k = Math.max(0, ck - 1); k <= Math.min(gz - 1, ck + 1); k++)
+      for (let j = Math.max(0, cj - 1); j <= Math.min(gy - 1, cj + 1); j++)
+        for (let i = Math.max(0, ci - 1); i <= Math.min(gx - 1, ci + 1); i++)
+          for (let p = headOf[i + gx * (j + gy * k)]; p >= 0; p = next[p]) {
+            const dx = out[p * 3] - x, dy = out[p * 3 + 1] - y, dz = out[p * 3 + 2] - z, d2 = dx * dx + dy * dy + dz * dz
+            if (d2 < best) best = d2
+          }
+    return Math.sqrt(best)
+  }
+  const N = dom.cornerNormals
+  const sample = (): [number, number, number, number, number, number] | null => {
+    for (let tries = 0; tries < 200; tries++) {
+      // A face by weight, then a uniform point in it.
+      const target = rng.next() * total
+      let a = 0, b = faces
+      while (a < b) { const m = (a + b) >> 1; if (cdf[m + 1] <= target) a = m + 1; else b = m }
+      const f = Math.min(faces - 1, a)
+      let u = rng.next(), w = rng.next()
+      if (u + w > 1) { u = 1 - u; w = 1 - w }
+      const A = I[f * 3] * 3, B = I[f * 3 + 1] * 3, C = I[f * 3 + 2] * 3
+      const x = P[A] + (P[B] - P[A]) * u + (P[C] - P[A]) * w
+      const y = P[A + 1] + (P[B + 1] - P[A + 1]) * u + (P[C + 1] - P[A + 1]) * w
+      const z = P[A + 2] + (P[B + 2] - P[A + 2]) * u + (P[C + 2] - P[A + 2]) * w
+      if (clear > 0 && dom.rimDistance(x, y, z, clear) < clear) continue
+      const o9 = f * 9, w0 = 1 - u - w
+      const nx = w0 * N[o9] + u * N[o9 + 3] + w * N[o9 + 6], ny = w0 * N[o9 + 1] + u * N[o9 + 4] + w * N[o9 + 7], nz = w0 * N[o9 + 2] + u * N[o9 + 5] + w * N[o9 + 8]
+      const L = Math.hypot(nx, ny, nz) || 1
+      return [x, y, z, nx / L, ny / L, nz / L]
+    }
+    return null
+  }
+  const k = o.placement === 'random' ? 1 : CANDIDATES
+  for (let misses = 0; placed < want && misses < 60;) {
+    let best: ReturnType<typeof sample> = null, score = -1
+    for (let c = 0; c < k; c++) {
+      const q = sample()
+      if (!q) continue
+      if (k === 1) { best = q; break }
+      const s = nearest(q[0], q[1], q[2])
+      if (s > score) { score = s; best = q }
+    }
+    if (!best) { misses++; continue }
+    misses = 0
+    out.set(best.slice(0, 3), placed * 3); normals.set(best.slice(3), placed * 3)
+    const [i, j, kk] = cellIndex(best[0], best[1], best[2])
+    const c = i + gx * (j + gy * kk)
+    next[placed] = headOf[c]; headOf[c] = placed
+    placed++
+  }
+  return { p: out.slice(0, placed * 3), n: normals.slice(0, placed * 3), short: placed < want }
+}
