@@ -6,7 +6,7 @@
 // segment; an attractor pulls only veins with a clear straight line to it. Both tests march through the grid by sphere
 // tracing: a point d below the limit has no wall within about d, so the march skips ahead by most of d, and a sight
 // line across a wide organ takes a handful of samples instead of hundreds.
-import type { MeshData, Vec3 } from '../lib/mesh'
+import { capOpenings, type MeshData, type Vec3 } from '../lib/mesh'
 import { sdfVoxel, signedDistance, type Grid } from '../lib/voxel'
 import type { Domain } from './domain'
 import { Rng } from './random'
@@ -18,12 +18,14 @@ const MIN_INSIDE_SHARE = 0.002
 
 export class InsideError extends Error {}
 
-// The model's signed distance grid, about `per` grid points across its longest side.
-export function buildSdf(mesh: MeshData, per = 220): { sdf: Sdf; insideShare: number } {
-  const v = sdfVoxel(mesh.positions, per)
-  const { grid, F, inside } = signedDistance(mesh.positions, mesh.indices, { v, pad: 3 * v })
+// The model's signed distance grid, about `per` grid points across its longest side. An open model, such as a vase,
+// has its openings closed with flat caps first, so its inside is the space it holds; `openings` says how many.
+export function buildSdf(mesh: MeshData, per = 220): { sdf: Sdf; insideShare: number; openings: number } {
+  const { mesh: closed, openings } = capOpenings(mesh)
+  const v = sdfVoxel(closed.positions, per)
+  const { grid, F, inside } = signedDistance(closed.positions, closed.indices, { v, pad: 3 * v })
   const share = inside / F.length
-  return { sdf: { ...grid, F }, insideShare: share }
+  return { sdf: { ...grid, F }, insideShare: share, openings }
 }
 
 export class InsideDomain implements Domain {

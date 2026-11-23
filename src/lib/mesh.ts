@@ -197,3 +197,20 @@ export function pieces(indices: ArrayLike<number>, vertexCount: number) {
   for (let f = 0; f < indices.length; f += 3) roots.add(find(indices[f]))
   return roots.size
 }
+
+// Closes each open rim with a flat cap: a fan from the rim's middle. An open vase becomes a closed jar, so it has an
+// inside to grow in. Returns the closed mesh and how many openings were capped.
+export function capOpenings(mesh: MeshData): { mesh: MeshData; openings: number } {
+  const loops = rimLoops(openEdges(mesh.indices), mesh.positions).filter(loop => loop.length >= 3)
+  if (!loops.length) return { mesh, openings: 0 }
+  const P = Array.from(mesh.positions), I = Array.from(mesh.indices)
+  for (const loop of loops) {
+    let cx = 0, cy = 0, cz = 0
+    for (const v of loop) { cx += P[v * 3]; cy += P[v * 3 + 1]; cz += P[v * 3 + 2] }
+    const c = P.length / 3
+    P.push(cx / loop.length, cy / loop.length, cz / loop.length)
+    // Rim edges run the way their own triangle does; the cap uses each edge the other way, so it faces out too.
+    for (let k = 0; k < loop.length; k++) I.push(loop[(k + 1) % loop.length], loop[k], c)
+  }
+  return { mesh: { positions: Float32Array.from(P), indices: Uint32Array.from(I) }, openings: loops.length }
+}

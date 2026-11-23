@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { edgeProblems, openEdges, rimLoops, weld } from './mesh'
+import { capOpenings, edgeProblems, openEdges, rimLoops, weld } from './mesh'
 import { sphere, vase } from './models'
 import { parseStl, readStlTriangles, StlError, writeStl } from './stl'
 
@@ -35,5 +35,15 @@ describe('STL', () => {
     const loops = rimLoops(openEdges(v.indices), v.positions)
     expect(loops.length).toBe(1)
     expect(loops[0].length).toBe(120)
+  })
+})
+
+describe('capOpenings', () => {
+  it('closes an open vase into a watertight jar', () => {
+    const v = vase()
+    expect(edgeProblems(v.indices)).toBeGreaterThan(0)
+    const { mesh, openings } = capOpenings(v)
+    expect(openings).toBe(1)
+    expect(edgeProblems(mesh.indices)).toBe(0)
   })
 })
