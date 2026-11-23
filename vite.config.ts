@@ -22,5 +22,8 @@ export default defineConfig({
   test: {
     environment: 'node',
     exclude: ['node_modules/**', 'dist/**', 'local/**'],
+    // The runner test waits on the worker's real 16 ms batch timers: 4.3 s on Gil's Mac, 6.6 s on GitHub's runner, past
+    // Vitest's 5 s default. The rest take under 2.5 s.
+    testTimeout: 30_000,
   },
 })
