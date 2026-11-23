@@ -10,7 +10,7 @@ import { GrowthClient } from './worker/client'
 import type { DomainInfo, Frame, FromRunner, RootRequest } from './worker/runner'
 
 export type Status = { text: string; warning?: boolean } | null
-export type Stats = { revision: number; step: number; points: number; live: number; done: Growth['done']; rate: number; freeTips: number }
+export type Stats = { revision: number; step: number; points: number; live: number; done: Growth['done']; rate: number; freeTips: number; rootless: number }
 
 function grow<T extends Float64Array | Int32Array | Uint8Array>(a: T, n: number): T {
   if (a.length >= n) return a
@@ -25,7 +25,7 @@ export class Mirror {
   parent = new Int32Array(0); sys = new Int32Array(0); fixed = new Uint8Array(0)
   joins = new Int32Array(0); links = new Int32Array(0); used = new Uint8Array(0)
   points = 0; joinPairs = 0; linkPairs = 0
-  step = 0; rng = 0; idle = 0; done: Growth['done'] = null; live = 0; freeTips = 0
+  step = 0; rng = 0; idle = 0; done: Growth['done'] = null; live = 0; freeTips = 0; rootless = 0
 
   reset(g: Growth | null, attractors: number) {
     const n = g ? g.x.length : 0
@@ -43,7 +43,7 @@ export class Mirror {
     this.points = n; this.joinPairs = g ? g.joins.length / 2 : 0; this.linkPairs = g ? g.links.length / 2 : 0
     this.step = g?.step ?? 0; this.rng = g?.rng ?? 0; this.idle = g?.idle ?? 0; this.done = g?.done ?? null
     this.live = this.used.reduce((k, u) => k + (u ? 0 : 1), 0)
-    this.freeTips = 0
+    this.freeTips = 0; this.rootless = 0
   }
 
   // Adds a frame's changes. False when the frame doesn't follow on from what's here.
@@ -61,7 +61,7 @@ export class Mirror {
     const l = this.linkPairs * 2 + f.links.length
     this.links = grow(this.links, l); this.links.set(f.links, this.linkPairs * 2); this.linkPairs = l / 2
     for (const s of f.used) this.used[s] = 1
-    this.step = f.step; this.rng = f.rng; this.idle = f.idle; this.done = f.done; this.live = f.live; this.freeTips = f.freeTips
+    this.step = f.step; this.rng = f.rng; this.idle = f.idle; this.done = f.done; this.live = f.live; this.freeTips = f.freeTips; this.rootless = f.rootless
     return true
   }
 
@@ -105,7 +105,7 @@ const NEW_ROOTS: (keyof Settings)[] = ['mode', 'model', 'systems', 'coupling']
 const LIVE: (keyof Settings)[] = ['segment', 'kill', 'attraction', 'loops', 'inertia', 'wiggle', 'pull', 'pullMode', 'apart', 'gap', 'repel', 'tipPull', 'widthRule', 'tipWidth', 'maxWidth', 'exponent']
 
 const statsOf = (m: Mirror, revision: number, rate = 0): Stats =>
-  ({ revision, step: m.step, points: m.points, live: m.live, done: m.done, rate, freeTips: m.freeTips })
+  ({ revision, step: m.step, points: m.points, live: m.live, done: m.done, rate, freeTips: m.freeTips, rootless: m.rootless })
 
 export function useVeins(initial: () => { design: Design; saved: boolean }, setStatus: (status: Status) => void) {
   const [first] = useState(initial)

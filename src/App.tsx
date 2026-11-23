@@ -39,10 +39,13 @@ function firstDesign(): { design: Design; saved: boolean } {
   return { design: { ...base, roots: defaultRequests(base) }, saved: true }
 }
 
-const DONE_TEXT: Record<string, (left: number, total: number) => string> = {
+const DONE_TEXT: Record<string, (left: number, total: number, rootless: number) => string> = {
   reached: () => 'Done: every attractor is reached.',
-  // A few left over is normal: no vein has a clear path to them. Most left over means the veins had no room.
-  stalled: (left, total) => left <= Math.max(3, 0.02 * total)
+  // Attractors on a separate piece of the model with no root: veins never cross from one piece to another. A few left
+  // over is normal: no vein has a clear path to them. Most left over means the veins had no room.
+  stalled: (left, total, rootless) => rootless > 0
+    ? `Stopped: ${rootless >= left ? `all ${count(left)}` : `${count(rootless)} of the ${count(left)}`} attractors left are on a part of the model with no root. Click it with the Roots tool (O) to grow there too.`
+    : left <= Math.max(3, 0.02 * total)
     ? `Done: all but ${count(left)} of ${count(total)} attractors are reached; no vein has a clear path to the rest.`
     : left > 0.5 * total
       ? `Stopped early: ${count(left)} of ${count(total)} attractors can’t be reached. The model may be too thin, or the roots boxed in: try a smaller edge clearance or segment, another root, or the other mode.`
@@ -318,11 +321,11 @@ export function App() {
   }, [atRisk])
 
   const counts = `${count(stats.points)} vein ${stats.points === 1 ? 'point' : 'points'} · ${count(stats.live)} ${stats.live === 1 ? 'attractor' : 'attractors'} left · step ${count(stats.step)}`
-  const doneText = stats.done ? DONE_TEXT[stats.done](stats.live, attractorCount) : ''
+  const doneText = stats.done ? DONE_TEXT[stats.done](stats.live, attractorCount, stats.rootless) : ''
   const statusText = status?.text ?? (model.stopping ? 'Stopping after the current step…'
     : running ? `Growing · ${counts}` : !model.ready ? 'Preparing the model…' : model.placingRoots ? 'Placing the roots…'
       : missingText ? missingText
-        : doneText ? (stats.done === 'reached' ? `${doneText} ${counts}${joining(s) ? ` · ${count(net.links.length / 2)} joins` : ''}` : doneText) : roots ? `Ready: press Grow. ${counts}` : DONE_TEXT.empty(0, 0))
+        : doneText ? (stats.done === 'reached' ? `${doneText} ${counts}${joining(s) ? ` · ${count(net.links.length / 2)} joins` : ''}` : doneText) : roots ? `Ready: press Grow. ${counts}` : DONE_TEXT.empty(0, 0, 0))
 
   return <main className="studio">
     <TooltipLayer />

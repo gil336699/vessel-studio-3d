@@ -45,6 +45,8 @@ export type Frame = {
   linkFrom: number; links: Int32Array
   used: Int32Array // attractors used up since the last frame
   live: number; freeTips: number
+  // Live attractors on a separate piece of the model with no vein of theirs: they need a root there.
+  rootless: number
   stepsPerSecond: number
 }
 
@@ -117,7 +119,7 @@ export function createRunner(post: (message: FromRunner, transfer: Transferable[
       parent: e.parent.slice(sentPoints, n), sys: e.sys.slice(sentPoints, n), fixed: Int32Array.from(fixed),
       joinFrom: sentJoins, joins: e.joins.slice(sentJoins * 2, j * 2),
       linkFrom: sentLinks, links: e.links.slice(sentLinks * 2, l * 2),
-      used: Int32Array.from(used), live: e.live, freeTips: e.freeTips(), stepsPerSecond: run ? rate : 0,
+      used: Int32Array.from(used), live: e.live, freeTips: e.freeTips(), rootless: e.rootless(), stepsPerSecond: run ? rate : 0,
     }
     sentPoints = n; sentJoins = j; sentLinks = l; used = []
     dirty = false

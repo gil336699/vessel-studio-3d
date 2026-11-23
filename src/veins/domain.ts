@@ -10,12 +10,21 @@ export interface Domain {
   readonly span: number
   // The model's middle, for the Pull toward the middle.
   readonly centre: readonly [number, number, number]
+  // How much farther than an attractor's nearest vein point, in kill distances, the nearest one that sees it may be and
+  // still be pulled. Infinity where veins can reach far parts of the model.
+  readonly seeBeyond: number
+  // Whether `sees` is quick (a few multiplications) rather than a march through the model.
+  readonly quickSight: boolean
+  // The model's separate pieces, which veins never cross between, and the piece a point is on, from 0. Missing means
+  // one piece, as inside, where a vein can't leave the solid it grows in anyway.
+  readonly regions?: number
+  region?(x: number, y: number, z: number): number
 
-  // One growth step from the vein point p (normal pn) along the unit heading h, `length` long, staying `clear` from the
-  // walls (inside) or the open rims (surface). On success it writes the new point and its normal to out, as
-  // [x, y, z, nx, ny, nz], and returns true. It returns false when the step is refused.
+  // One growth step from the vein point p (normal pn, on piece `region` when known) along the unit heading h, `length`
+  // long, staying `clear` from the walls (inside) or the open rims (surface). On success it writes the new point and
+  // its normal to out, as [x, y, z, nx, ny, nz], and returns true. It returns false when the step is refused.
   step(px: number, py: number, pz: number, pnx: number, pny: number, pnz: number,
-    hx: number, hy: number, hz: number, length: number, clear: number, out: Float64Array): boolean
+    hx: number, hy: number, hz: number, length: number, clear: number, out: Float64Array, region?: number): boolean
 
   // Whether the vein point p may pull toward the attractor a. Inside: the straight line between them stays `clear`
   // inside the wall, so a vein is never pulled into a corner it can't grow past. On the surface: their normals don't

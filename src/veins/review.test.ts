@@ -1,6 +1,6 @@
 // Tests for problems the independent review and the QA rounds found. Each fails without its fix.
 import { describe, expect, it } from 'vitest'
-import type { MeshData } from '../lib/mesh'
+import { weld, type MeshData } from '../lib/mesh'
 import { lens, sphere, vase } from '../lib/models'
 import { parseStl, StlError } from '../lib/stl'
 import { Engine, type GrowthParams } from './engine'
@@ -16,7 +16,7 @@ const flip = (m: MeshData): MeshData => {
   return { positions: m.positions, indices: I }
 }
 
-// A closed box of small triangles, `a` mm on a side, centred on the origin.
+// A closed box of small triangles, `a` mm on a side, centred on the origin, welded at its edges as reading an STL does.
 function box(a = 40, n = 8): MeshData {
   const P: number[] = [], I: number[] = []
   const faces: number[][][] = [
@@ -31,7 +31,7 @@ function box(a = 40, n = 8): MeshData {
     }
     for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const q = base + j * (n + 1) + i; I.push(q, q + 1, q + n + 2, q, q + n + 2, q + n + 1) }
   }
-  return { positions: Float32Array.from(P), indices: Uint32Array.from(I) }
+  return weld(I.flatMap(q => [P[q * 3], P[q * 3 + 1], P[q * 3 + 2]]))
 }
 
 describe('review fixes', () => {
@@ -106,6 +106,30 @@ describe('review fixes', () => {
     expect(dom.step(19.7, 0, 20, 0, 0, 1, 1, 0, 0, 1, 0, out)).toBe(true)
     expect(out[2]).toBeLessThan(19.5)
     expect(out[0]).toBeCloseTo(20, 3)
+  })
+
+  it('keeps surface veins on the piece of the model they start on, as a pot off its saucer', () => {
+    // Found in 1.1's QA: on the springpot, veins that reached the pot's foot stepped across the 1 mm gap onto its saucer,
+    // a separate piece with no root (1,332 vein points), which a print would join to the pot. Here a 40 mm box sits 1 mm
+    // above a wider plate 1 mm thick.
+    const cube = box(), plate = box(60, 12)
+    const P = Float32Array.from(plate.positions, (x, i) => (i % 3 === 2 ? x / 60 - 21.5 : x))
+    const n = cube.positions.length / 3
+    const both: MeshData = { positions: Float32Array.from([...cube.positions, ...P]), indices: Uint32Array.from([...cube.indices, ...Array.from(plate.indices, q => q + n)]) }
+    const dom = new SurfaceDomain(both)
+    expect(dom.regions).toBe(2)
+    const placed = scatterSurface(dom, { count: 1500, placement: 'even', seed: 2, clearance: 0 })
+    const e = new Engine(dom, placed, params, { roots: [dom.root([0, 0, 20], 0)!] })
+    for (let s = 0; s < 3000 && e.stepOnce() && !e.done; s++) { /* grow */ }
+    expect(e.points).toBeGreaterThan(300)
+    // Down the box's sides and over its bottom, but never onto the plate, whose attractors are all left.
+    expect(Math.min(...e.z)).toBeGreaterThan(-20.5)
+    let plateUsed = 0, onPlate = 0
+    for (let a = 0; a < e.used.length; a++) if (placed.p[a * 3 + 2] < -20.5) { onPlate++; if (e.used[a]) plateUsed++ }
+    expect(plateUsed).toBe(0)
+    // The status can say they need a root of their own.
+    expect(onPlate).toBeGreaterThan(300)
+    expect(e.rootless()).toBe(onPlate)
   })
 
   it('grows surface veins round a box’s sharp edges, onto its sides and bottom', () => {

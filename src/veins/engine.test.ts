@@ -45,6 +45,33 @@ describe('PointTree', () => {
       expect(tree.bestId).toBe(id)
     }
   })
+
+  it('hands points over nearest first, the lower index first on a tie, up to a bound, as a full sort does', () => {
+    const rng = new Rng(4)
+    const n = 400, xs = new Float64Array(n), ys = new Float64Array(n), zs = new Float64Array(n)
+    for (let i = 0; i < n; i++) { xs[i] = Math.floor(rng.next() * 6); ys[i] = Math.floor(rng.next() * 6); zs[i] = Math.floor(rng.next() * 6) }
+    // Every other point, so the tree's indices aren't its positions in the arrays.
+    const ids = Array.from({ length: n / 2 }, (_, i) => i * 2 + 1)
+    const tree = new PointTree(xs, ys, zs, ids)
+    for (let q = 0; q < 200; q++) {
+      const qx = Math.floor(rng.next() * 6), qy = Math.floor(rng.next() * 6) + (q % 2) * 0.5, qz = Math.floor(rng.next() * 6)
+      const d2 = (i: number) => (xs[i] - qx) ** 2 + (ys[i] - qy) ** 2 + (zs[i] - qz) ** 2
+      const sorted = [...ids].sort((a, b) => d2(a) - d2(b) || a - b)
+      // A bound at some point's distance, with an index on it: ties below the index are in, the rest out.
+      const edge = sorted[Math.floor(rng.next() * sorted.length)], limit = q % 3 === 0 ? Infinity : d2(edge), below = q % 3 === 0 ? -1 : edge
+      const want = sorted.filter(i => d2(i) < limit || (d2(i) === limit && i < below))
+      const stop = Math.floor(rng.next() * (want.length + 2))
+      const got: number[] = []
+      tree.ordered(qx, qy, qz, limit, below, (id, dd) => { expect(dd).toBe(d2(id)); got.push(id); return got.length === stop })
+      expect(got).toEqual(want.slice(0, stop || want.length))
+      // Depth first, with a test: the nearest point the test takes, within the bound.
+      const takes = (id: number) => (id * 7919) % 5 === 0
+      tree.nearestWhere(qx, qy, qz, limit, below, takes)
+      const first = want.find(takes)
+      expect(tree.bestId).toBe(first ?? below)
+      if (first !== undefined) expect(tree.bestD2).toBe(d2(first))
+    }
+  })
 })
 
 describe('Inside', () => {

@@ -2,9 +2,10 @@
 //
 // A growth step keeps only the part of its heading along the surface (the part along the normal is removed), then the
 // new point is snapped onto the mesh with three-mesh-bvh's closestPointToPoint. A step is refused when the snap lands
-// on a sheet facing the other way (it jumped across a thin wall or a gap), when it hardly moves (stuck at a rim), or
-// when it comes nearer an open rim than the edge clearance. An attractor pulls only veins whose normal doesn't face
-// away from its own, so veins never pair across a thin wall or a narrow gap.
+// on a sheet facing the other way (it jumped across a thin wall or a gap), on another piece of the model (it jumped the
+// gap between a pot and its saucer, say), when it hardly moves (stuck at a rim), or when it comes nearer an open rim
+// than the edge clearance. An attractor pulls only veins on its own piece whose normal doesn't face away from its own,
+// so veins never pair across a thin wall, a narrow gap or a gap between pieces.
 import { BufferAttribute, BufferGeometry, Vector3 } from 'three'
 import { MeshBVH, type HitPointInfo } from 'three-mesh-bvh'
 import { meshBounds, openEdges, rimLoops, type MeshData, type Vec3 } from '../lib/mesh'
@@ -22,6 +23,10 @@ const CREASE = Math.cos(Math.PI / 3)
 
 export class SurfaceDomain implements Domain {
   readonly kind = 'surface'
+  // Sight is a quick test of two normals, and a vein far across the skin can still grow to an attractor, down a pot's
+  // inside walls onto its floor, say.
+  readonly seeBeyond = Infinity
+  readonly quickSight = true
   readonly span: number
   readonly centre: readonly [number, number, number]
   readonly area: number
@@ -41,6 +46,10 @@ export class SurfaceDomain implements Domain {
   private probed = new Float64Array(6)
   private rimGrid: Map<number, number[]>
   private rimCell: number
+  // The model's separate pieces, by triangles that share corners, and each triangle's piece (null for one piece). A vein
+  // stays on the piece it starts on: one that crossed the gap between two would join them in a print.
+  readonly regions: number
+  private faceRegion: Int32Array | null
 
   constructor(mesh: MeshData) {
     const geometry = new BufferGeometry()
@@ -103,6 +112,9 @@ export class SurfaceDomain implements Domain {
       const r = this.rimSegments
       longest = Math.max(longest, Math.hypot(r[s + 3] - r[s], r[s + 4] - r[s + 1], r[s + 5] - r[s + 2]))
     }
+    const parts = facePieces(I, P.length / 3)
+    this.regions = parts.count
+    this.faceRegion = parts.count > 1 ? parts.face : null
     this.rimCell = Math.max(longest, this.span / 200, 1e-6)
     this.rimGrid = new Map()
     for (let s = 0; s < this.rimSegments.length / 6; s++) {
@@ -114,6 +126,12 @@ export class SurfaceDomain implements Domain {
   }
 
   get open() { return this.rimSegments.length > 0 }
+
+  // The piece of the model a point on it is on, from 0.
+  region(x: number, y: number, z: number): number {
+    if (!this.faceRegion) return 0
+    return this.snap(x, y, z, this.probed) ? this.faceRegion[this.hit.faceIndex] : 0
+  }
 
   private rimKey(i: number, j: number, k: number) { return ((i + 32768) * 65536 + (j + 32768)) * 65536 + (k + 32768) }
 
@@ -169,7 +187,7 @@ export class SurfaceDomain implements Domain {
   }
 
   step(px: number, py: number, pz: number, pnx: number, pny: number, pnz: number,
-    hx: number, hy: number, hz: number, length: number, clear: number, out: Float64Array): boolean {
+    hx: number, hy: number, hz: number, length: number, clear: number, out: Float64Array, region = -1): boolean {
     // Keep only the part of the heading along the surface.
     const along = hx * pnx + hy * pny + hz * pnz
     let tx = hx - along * pnx, ty = hy - along * pny, tz = hz - along * pnz
@@ -216,6 +234,11 @@ export class SurfaceDomain implements Domain {
       d = Math.hypot(dx, dy, dz)
       if (!(d > 0.25 * length)) return false
     } else this.snap(x, y, z, s, length)
+    if (this.faceRegion) {
+      // Landed on another piece: it jumped the gap between them.
+      const landed = this.faceRegion[this.hit.faceIndex]
+      if (landed !== (region >= 0 ? region : this.region(px, py, pz))) return false
+    }
     if (s[3] * pnx + s[4] * pny + s[5] * pnz < STEP_TURN && folds === 0) return false
     if (clear > 0 && this.rimDistance(s[0], s[1], s[2], clear) < clear) return false
     out.set(s)
@@ -372,6 +395,22 @@ export class SurfaceDomain implements Domain {
     }
     return out
   }
+}
+
+// Each triangle's piece of the model, by triangles that share corners, and how many pieces there are.
+function facePieces(I: Uint32Array, vertices: number): { count: number; face: Int32Array } {
+  const up = Int32Array.from({ length: vertices }, (_, i) => i)
+  const find = (a: number): number => { while (up[a] !== a) { up[a] = up[up[a]]; a = up[a] } return a }
+  const faces = I.length / 3
+  for (let f = 0; f < faces; f++) { const a = find(I[f * 3]); up[find(I[f * 3 + 1])] = a; up[find(I[f * 3 + 2])] = a }
+  const label = new Map<number, number>(), face = new Int32Array(faces)
+  for (let f = 0; f < faces; f++) {
+    const r = find(I[f * 3])
+    let k = label.get(r)
+    if (k === undefined) { k = label.size; label.set(r, k) }
+    face[f] = k
+  }
+  return { count: Math.max(1, label.size), face }
 }
 
 export type SurfacePlacement = 'even' | 'random' | 'painted'

@@ -30,6 +30,11 @@ export function buildSdf(mesh: MeshData, per = 220): { sdf: Sdf; insideShare: nu
 
 export class InsideDomain implements Domain {
   readonly kind = 'inside'
+  // Sight lines march through the distance grid, so testing every vein point would slow growth many times over in a
+  // folded model, and a vein just round a fold, at most a kill distance farther away than the nearest, is the one that
+  // matters: farther ones would grow long straight branches across the model to reach it.
+  readonly seeBeyond = 1
+  readonly quickSight = false
   readonly span: number
   readonly centre: readonly [number, number, number]
   // The grid points inside, and their box.

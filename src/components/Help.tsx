@@ -38,7 +38,7 @@ export function HelpDialog({ onClose, onQuickStart }: { onClose: () => void; onQ
     <h2 id="help-title">Keyboard shortcuts</h2>
     <dl>{SHORTCUTS.map(([keys, action]) => <div key={keys}><dt><kbd>{keys}</kbd></dt><dd>{action}</dd></div>)}</dl>
     <p className="hint">On touch screens, one finger orbits and two fingers pan and zoom; with the Roots tool, a tap adds a root. On Windows, use Ctrl for ⌘.</p>
-    <p className="hint">Vessel Studio 3D grows vessels by space colonization (Runions, Lane and Prusinkiewicz 2007): attractors fill the model, each pulls on its nearest vein, and veins grow toward them until every one is reached. Two systems can grow together and join (Kinstlinger et al. 2020) or stay apart.</p>
+    <p className="hint">Vessel Studio 3D grows vessels by space colonization (Runions, Lane and Prusinkiewicz 2007): attractors fill the model, each pulls on the nearest vein that can see it, and veins grow toward them until every one is reached. Two systems can grow together and join (Kinstlinger et al. 2020) or stay apart.</p>
     <div className="confirm-actions">
       <button type="button" data-tip="Show the three-step guide again." onClick={onQuickStart}>Show quick start</button>
       <button type="button" className="primary" data-autofocus onClick={onClose}>Close</button>

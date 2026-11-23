@@ -4,10 +4,12 @@
 // into a domain: Inside (through a closed model) or Surface (across a model's skin).
 //
 // Each step, in this order:
-// 1. Pair. Every live attractor pulls on its nearest vein point, if that is nearer than the attraction distance (no
-//    limit by default) and the domain says it can see the attractor. An attractor within the kill distance of a vein
-//    point that sees it is used up first. With loops, an attractor pulls every vein point in its relative
-//    neighbourhood instead, and stays until all of them have arrived; then they join there.
+// 1. Pair. Every live attractor pulls on the nearest vein point that can see it (the domain says which can), if that is
+//    nearer than the attraction distance (no limit by default). In a folded model the nearest vein is often just across
+//    a wall, where it can't reach the attractor; a vein on the attractor's own side grows to it instead. An attractor
+//    within the kill distance of a vein point that sees it is used up first. With loops, an attractor pulls every vein
+//    point in its relative neighbourhood among those that see it, and stays until all of them have arrived; then they
+//    join there.
 // 2. Grow. Every vein point that was pulled adds one point, a segment length away, toward the average of its pulls,
 //    optionally blended with its last heading (Keep heading), a seeded wobble (Wiggle) and a steady Pull. The domain
 //    places the point and may refuse it: inside, when it leaves the volume or comes nearer the wall than the edge
@@ -24,10 +26,12 @@
 //   tree too (never its own), so the tips meet and join into one network that flow can pass through: the mutual tree
 //   attraction of Kinstlinger et al. 2020 (Nature Biomedical Engineering 4, 916–932), designed with Nervous System.
 //
-// The nearest vein point of every attractor, in each tree it feeds, is cached and updated with each step's new points
-// only, through a small k-d tree. Vein points never move or vanish, so that is exact, and ties go to the older point,
-// as a full search would. Whether a vein point sees an attractor is cached for its nearest point, as sight lines inside
-// cost a march through the distance grid.
+// The nearest vein point of every attractor, in each tree it feeds, is cached, and so is the nearest one that sees it,
+// both updated with each step's new points only, through a small k-d tree. Vein points never move or vanish, and
+// whether one sees an attractor never changes, so that is exact; ties go to the older point, as a full search would. So
+// a reopened project, which searches all its points at once, finds what an unbroken run found step by step. Every vein
+// point nearer an attractor than the nearest one that sees it is known not to, so new points are tested nearest first,
+// and only until one sees it: sight lines inside cost a march through the distance grid.
 //
 // This is a picture-making model, not a physiological one: veins grow toward free space, not toward tissue that needs
 // blood, and widths follow Murray's law from the tips, not flow.
@@ -105,6 +109,9 @@ const RN_FAR = 10
 const IDLE_SPARE = 50
 // Join: a tip pulls the other tree from this many kill distances away, and the trees join within one kill distance.
 const TIP_REACH = 3
+// How far the vein point that sees an attractor may be and still count, squared: the attraction distance, or the kill
+// distance where that is longer, so a vein that reaches an attractor still uses it up; no limit by default.
+const reach2 = (p: GrowthParams) => (p.attraction > 0 ? Math.max(p.attraction, p.kill) ** 2 : Infinity)
 
 class Grow {
   data: Float64Array | Int32Array
@@ -131,15 +138,31 @@ export class Engine {
   private anz: Float64Array
   // The system each attractor feeds, or SHARED.
   readonly asys: Uint8Array
+  // The piece of the model each attractor is on, when it has several.
+  private aregion: Int32Array
   // 0 live, 1 used up.
   readonly used: Uint8Array
-  // How many trees there are, and for every attractor and tree, the nearest vein point, its squared distance, and
-  // whether that point sees it: entry s * T + t.
+  // How many trees there are, and for every attractor and tree (entry s * T + t): the nearest vein point and its squared
+  // distance, and the nearest vein point that sees the attractor, within reach, and its squared distance (-1 and
+  // Infinity when none does).
   private T: number
   private best: Float64Array
   private owner: Int32Array
-  private sightOf: Int32Array
-  private sight: Uint8Array
+  private seen: Int32Array
+  private seenD2: Float64Array
+  // The vein points the caches cover: all of them, except while junctions are added when growth stops.
+  private known = 0
+  // The attractor and entry a search for the nearest point that sees it is for, a point known not to, and the search's
+  // test, made once.
+  private seekS = 0
+  private seekE = 0
+  private seekSkip = -1
+  private readonly seekVisit = (id: number, d2: number) => {
+    if (id === this.seekSkip || !this.seesFresh(id, this.seekS)) return false
+    this.seen[this.seekE] = id; this.seenD2[this.seekE] = d2
+    return true
+  }
+  private readonly seekAccept = (id: number) => id !== this.seekSkip && this.seesFresh(id, this.seekS)
   private xs = new Grow('f')
   private ys = new Grow('f')
   private zs = new Grow('f')
@@ -154,6 +177,8 @@ export class Engine {
   private sysOf = new Grow('i') // the system each point belongs to
   private fixedFlag = new Grow('i') // 1 for entry points
   private linked = new Grow('i') // 1 for points where the two trees met (Join)
+  private regionOf = new Grow('i') // the piece of the model each point is on, when it has several
+  private grownOn = new Set<number>() // pieces with a growing vein point of each tree, as piece * T + tree
   private joinList = new Grow('i')
   private linkList = new Grow('i')
   private grid: PointGrid
@@ -185,11 +210,13 @@ export class Engine {
       const s = attractors.sys ? attractors.sys[i] : 0
       this.asys[i] = this.T === 1 ? 0 : this.joining ? SHARED : Math.min(this.T - 1, s === SHARED ? 0 : s)
     }
+    this.aregion = new Int32Array(k)
+    if (this.pieced) for (let i = 0; i < k; i++) this.aregion[i] = domain.region!(this.ax[i], this.ay[i], this.az[i])
     this.used = new Uint8Array(k)
     this.best = new Float64Array(k * this.T).fill(Infinity)
     this.owner = new Int32Array(k * this.T).fill(-1)
-    this.sightOf = new Int32Array(k * this.T).fill(-1)
-    this.sight = new Uint8Array(k * this.T)
+    this.seen = new Int32Array(k * this.T).fill(-1)
+    this.seenD2 = new Float64Array(k * this.T).fill(Infinity)
     this.grid = new PointGrid(Math.max(1e-6, 2.5 * params.segment), domain.centre)
     if ('roots' in from) {
       this.rng = new Rng(params.seed)
@@ -215,6 +242,8 @@ export class Engine {
   }
 
   private get joining() { return this.T === 2 && this.params.coupling === 'join' }
+  // Whether the model is in pieces that veins stay on.
+  private get pieced() { return (this.domain.regions ?? 1) > 1 && !!this.domain.region }
   private get interweaving() { return this.T > 1 && !this.joining }
   private get idleLimit() { return Math.ceil(this.domain.span / Math.max(1e-9, this.params.segment)) + IDLE_SPARE }
 
@@ -239,6 +268,21 @@ export class Engine {
     for (let i = 0; i < this.xs.length; i++) if (this.fixedFlag.data[i]) out.push(i)
     return out
   }
+  // Live attractors on a piece of the model where no vein of theirs grows: only a root there can reach them.
+  rootless(): number {
+    if (!this.pieced) return 0
+    const T = this.T
+    let n = 0
+    for (let s = 0; s < this.ax.length; s++) {
+      if (this.used[s] !== LIVE) continue
+      const r = this.aregion[s] * T, a = this.asys[s]
+      let fed = false
+      for (let t = 0; t < T && !fed; t++) if ((a === SHARED || a === t) && this.grownOn.has(r + t)) fed = true
+      if (!fed) n++
+    }
+    return n
+  }
+
   // Free tips: vein ends that haven't met the other tree. In Join they are the network's dead ends.
   freeTips(): number {
     let n = 0
@@ -252,10 +296,12 @@ export class Engine {
       this.grid = new PointGrid(Math.max(1e-6, 2.5 * params.segment), this.domain.centre)
       for (let i = 0; i < this.xs.length; i++) if (!this.fixedFlag.data[i]) this.grid.add(i, this.xs.data[i], this.ys.data[i], this.zs.data[i])
     }
-    // Sight lines inside depend on the clearance: work them out again.
-    if (params.clearance !== this.params.clearance) this.sightOf.fill(-1)
+    // Which vein points see an attractor depends on the clearance (inside), and only those within reach count: work
+    // them out again when either changes.
+    const resee = params.clearance !== this.params.clearance || reach2(params) !== reach2(this.params) || params.kill !== this.params.kill
     // The number of systems and how they couple are fixed for an engine; they change by starting again.
     this.params = { ...params, systems: this.params.systems, coupling: this.params.coupling }
+    if (resee) this.seeAgain()
     // New settings may let growth carry on, unless every attractor is already reached; the wait for progress starts
     // again, or growth that stopped for lack of it would stop again at once.
     if (this.done && this.done !== 'empty' && this.done !== 'reached') { this.done = null; this.idle = 0 }
@@ -298,6 +344,9 @@ export class Engine {
     this.sysOf.push(system)
     this.fixedFlag.push(fixed ? 1 : 0)
     this.linked.push(0)
+    // A grown point is on its parent's piece, as steps never leave it; a root is on the piece it was placed on.
+    this.regionOf.push(parent >= 0 && !this.fixedFlag.data[parent] ? this.regionOf.data[parent] : this.pieced ? this.domain.region!(x, y, z) : 0)
+    if (!fixed) this.grownOn.add(this.regionOf.data[id] * this.T + system)
     if (parent >= 0) {
       // A first child takes over its parent's end; any other adds one for every point back to the root.
       if (this.kids.data[parent] > 0) for (let a = parent; a >= 0; a = this.parents.data[a]) this.ends.data[a]++
@@ -325,35 +374,81 @@ export class Engine {
   // Does attractor s feed tree t?
   private feeds(s: number, t: number) { const a = this.asys[s]; return a === SHARED || a === t }
 
-  // Bring each attractor's nearest vein point in each tree it feeds up to date with the points from index `from` on.
-  // Entry points never grow, so they never count as anyone's nearest point.
+  // The growing vein points of tree t from index `from` on. Entry points never grow, so they are never anyone's nearest.
+  private growing(t: number, from: number): number[] {
+    const ids: number[] = []
+    for (let i = from; i < this.xs.length; i++) if (!this.fixedFlag.data[i] && this.sysOf.data[i] === t) ids.push(i)
+    return ids
+  }
+
+  // Bring each attractor's nearest vein point, and its nearest that sees it, in each tree it feeds, up to date with the
+  // points from index `from` on.
   private refreshNearest(from: number) {
-    const T = this.T
+    const T = this.T, far = reach2(this.params)
     for (let t = 0; t < T; t++) {
-      const ids: number[] = []
-      for (let i = from; i < this.xs.length; i++) if (!this.fixedFlag.data[i] && this.sysOf.data[i] === t) ids.push(i)
+      const ids = this.growing(t, from)
       if (!ids.length) continue
       const tree = new PointTree(this.xs.data, this.ys.data, this.zs.data, ids)
       for (let s = 0; s < this.ax.length; s++) {
         if (this.used[s] !== LIVE || !this.feeds(s, t)) continue
-        const e = s * T + t
-        tree.nearest(this.ax[s], this.ay[s], this.az[s], this.best[e], this.owner[e])
-        this.best[e] = tree.bestD2; this.owner[e] = tree.bestId
+        const e = s * T + t, before = this.owner[e]
+        tree.nearest(this.ax[s], this.ay[s], this.az[s], this.best[e], before)
+        const v = tree.bestId
+        this.best[e] = tree.bestD2; this.owner[e] = v
+        // Nothing new within reach: the nearest point overall is out of it.
+        if (!(tree.bestD2 < far)) continue
+        const lim = this.bound(e)
+        // A nearer point shrinks the bound; one that sees it beyond the new bound no longer counts, and every point within
+        // it is nearer, so doesn't see it.
+        if (this.seen[e] >= 0 && !(this.seenD2[e] < lim)) { this.seen[e] = -1; this.seenD2[e] = Infinity }
+        if (v !== before) {
+          // The nearest point is new: if it sees the attractor, it is the nearest that does.
+          if (this.seesFresh(v, s)) { this.seen[e] = v; this.seenD2[e] = tree.bestD2; continue }
+          this.seek(tree, s, e, v, lim)
+        } else if (this.seen[e] !== v) this.seek(tree, s, e, -1, lim)
+        // Otherwise the nearest point sees it, and no new point is nearer.
       }
     }
+    this.known = this.xs.length
   }
 
+  // The nearest vein point that sees attractor s, with the points in `tree` too: only those nearer than the one it has
+  // (all nearer points don't see it) and within `lim` are tested. Where sight is slow to test they go nearest first, and
+  // the first that sees it is the nearest that does; where it is quick, depth first, as the nearest point is found.
+  // `skip` is a point already known not to.
+  private seek(tree: PointTree, s: number, e: number, skip: number, lim: number) {
+    const had = this.seen[e] >= 0, cap = had ? this.seenD2[e] : lim, below = had ? this.seen[e] : -1
+    this.seekS = s; this.seekE = e; this.seekSkip = skip
+    if (!this.domain.quickSight) { tree.ordered(this.ax[s], this.ay[s], this.az[s], cap, below, this.seekVisit); return }
+    tree.nearestWhere(this.ax[s], this.ay[s], this.az[s], cap, below, this.seekAccept)
+    if (tree.bestId !== below) { this.seen[e] = tree.bestId; this.seenD2[e] = tree.bestD2 }
+  }
+
+  // How far, squared, the vein point that sees an attractor may be: within reach, and no farther beyond the nearest vein
+  // point than the domain allows.
+  private bound(e: number): number {
+    const beyond = this.domain.seeBeyond * this.params.kill
+    return Math.min(reach2(this.params), beyond === Infinity ? Infinity : (Math.sqrt(this.best[e]) + beyond) ** 2)
+  }
+
+  // Search every vein point again, for new sight rules.
+  private seeAgain() {
+    this.seen.fill(-1); this.seenD2.fill(Infinity)
+    for (let t = 0; t < this.T; t++) {
+      const ids = this.growing(t, 0)
+      if (!ids.length) continue
+      const tree = new PointTree(this.xs.data, this.ys.data, this.zs.data, ids)
+      for (let s = 0; s < this.ax.length; s++) if (this.used[s] === LIVE && this.feeds(s, t)) this.seek(tree, s, s * this.T + t, -1, this.bound(s * this.T + t))
+    }
+    this.known = this.xs.length
+  }
+
+  // A vein point sees an attractor on its own piece of the model only.
   private seesFresh(v: number, s: number): boolean {
+    if (this.regionOf.data[v] !== this.aregion[s]) return false
     const X = this.xs.data, Y = this.ys.data, Z = this.zs.data
     return this.domain.sees(X[v], Y[v], Z[v], this.nxs.data[v], this.nys.data[v], this.nzs.data[v],
       this.ax[s], this.ay[s], this.az[s], this.anx[s], this.any[s], this.anz[s], Math.max(0, this.params.clearance))
-  }
-
-  // Whether attractor s's nearest vein point in tree t sees it, worked out once for each new nearest point.
-  private seesNearest(s: number, t: number): boolean {
-    const e = s * this.T + t, v = this.owner[e]
-    if (this.sightOf[e] !== v) { this.sightOf[e] = v; this.sight[e] = this.seesFresh(v, s) ? 1 : 0 }
-    return this.sight[e] === 1
   }
 
   // The steady pull for a vein point, as a unit vector, or zeros. Up is +Z, as in CAD apps and slicers.
@@ -418,58 +513,47 @@ export class Engine {
     const closed = P.topology === 'closed' && !this.joining
     for (let s = 0; s < this.ax.length; s++) {
       if (this.used[s] !== LIVE) continue
-      if (this.asys[s] === SHARED) {
-        // Join: a shared attractor pulls the nearest point of the nearer tree, as one field of attractors would, so each
-        // tree takes the space nearest it and the two meet between (ties go to the first tree).
-        let t = 0
-        for (let u = 1; u < T; u++) if (this.best[s * T + u] < this.best[s * T + t]) t = u
-        const e = s * T + t, d = Math.sqrt(this.best[e])
-        if (d < P.kill) { if (this.seesNearest(s, t)) { this.used[s] = USED; usedNow.push(s) } else inReach++; continue }
-        if (!(d < limit)) continue
-        inReach++
-        if (this.seesNearest(s, t)) pulls(this.owner[e], s, d)
-        continue
-      }
-      const t = this.asys[s], e = s * T + t
-      const d = Math.sqrt(this.best[e])
-      if (!closed) {
-        const v = this.owner[e]
-        // Used up by a vein that reaches it; one just across a wall can't (it can't see it), but it is in reach, so
-        // growth that stops with only these left has stalled, not run out of reach.
-        if (d < P.kill) { if (this.seesNearest(s, t)) { this.used[s] = USED; usedNow.push(s) } else inReach++; continue }
-        if (!(d < limit)) continue
-        inReach++
-        if (!this.seesNearest(s, t)) continue
-        pulls(v, s, d)
-      } else {
-        if (!(d < limit)) continue
-        inReach++
-        // Far from every vein, the nearest point is the one that matters, and finding the whole neighbourhood would
-        // search a wide empty space; loops only form once veins come near.
-        if (d > Math.max(RN_FAR * P.segment, 2 * P.kill)) {
-          if (this.seesNearest(s, t)) pulls(this.owner[e], s, d)
-          continue
+      // The tree it feeds. Join: a shared attractor pulls the tree whose nearest point that sees it is nearer, as one
+      // field of attractors would, so each tree takes the space nearest it and the two meet between (ties go to the
+      // first tree).
+      let t = this.asys[s], near = Infinity
+      if (t === SHARED) {
+        t = 0
+        for (let u = 0; u < T; u++) {
+          near = Math.min(near, this.best[s * T + u])
+          if (this.seenD2[s * T + u] < this.seenD2[s * T + t]) t = u
         }
-        const rn = this.neighbourhood(s, d)
-        if (!rn.length) continue
-        const away = rn.filter(([, dv]) => !(dv < P.kill))
-        if (!away.length) { resolved.push({ s, arrived: rn.map(([v]) => v) }); continue }
-        for (const [v, dv] of away) pulls(v, s, dv)
-      }
+      } else near = this.best[s * T + t]
+      const e = s * T + t, v = this.seen[e], d = Math.sqrt(this.seenD2[e])
+      // Used up by a vein that sees it and reaches it.
+      if (!closed && v >= 0 && d < P.kill) { this.used[s] = USED; usedNow.push(s); continue }
+      // In reach, even of veins that can't see it: growth that stops with only these left has stalled, not run out of
+      // reach.
+      if (!(Math.sqrt(near) < limit)) continue
+      inReach++
+      if (v < 0 || !(d < limit)) continue
+      // Loops: far from every vein, the nearest point that sees it is the one that matters, and finding the whole
+      // neighbourhood would search a wide empty space; loops only form once veins come near.
+      if (!closed || d > Math.max(RN_FAR * P.segment, 2 * P.kill)) { pulls(v, s, d); continue }
+      const rn = this.neighbourhood(s, d)
+      if (!rn.length) continue
+      const away = rn.filter(([, du]) => !(du < P.kill))
+      if (!away.length) { resolved.push({ s, arrived: rn.map(([u]) => u) }); continue }
+      for (const [u, du] of away) pulls(u, s, du)
     }
 
     // Join: each free tip pulls the nearest point of the other tree that sees it, and the two join once within the kill
     // distance. Tips are taken in order, so the result never depends on timing.
     let linkedNow = 0
     if (this.joining) {
-      const reach = TIP_REACH * P.kill, w = Math.max(0, Math.min(1, P.tipPull ?? 0.6))
+      const reach = TIP_REACH * P.kill, w = Math.max(0, Math.min(1, P.tipPull ?? 0.6)), REG = this.regionOf.data
       const clear = Math.max(0, P.clearance)
       for (let v = 0; v < n; v++) {
         if (!this.isTip(v)) continue
         const other = 1 - SYS[v]
         let u = -1, best = reach * reach
         this.grid.near(X[v], Y[v], Z[v], reach, X, Y, Z, (id, d2) => {
-          if (SYS[id] === other && (d2 < best || (d2 === best && id < u))) { best = d2; u = id }
+          if (SYS[id] === other && REG[id] === REG[v] && (d2 < best || (d2 === best && id < u))) { best = d2; u = id }
         })
         if (u < 0) continue
         const d = Math.sqrt(best)
@@ -550,7 +634,7 @@ export class Engine {
       // round each other's vessels. It uses up no attractors: they can still be reached the long way round.
       const tries = this.interweaving ? 4 : 1
       for (let attempt = 0; attempt < tries; attempt++) {
-        if (!this.domain.step(X[v], Y[v], Z[v], this.nxs.data[v], this.nys.data[v], this.nzs.data[v], hx, hy, hz, D, clear, out)) {
+        if (!this.domain.step(X[v], Y[v], Z[v], this.nxs.data[v], this.nys.data[v], this.nzs.data[v], hx, hy, hz, D, clear, out, this.regionOf.data[v])) {
           if (attempt === 0) refuse(list, X[v] + hx * D, Y[v] + hy * D, Z[v] + hz * D)
           break
         }
@@ -623,13 +707,13 @@ export class Engine {
   // straight join keeps the domain's rules, so near misses still connect. Returns the number of joins.
   private settleLinks(): number {
     const P = this.params, reach = 2 * P.kill, clear = Math.max(0, P.clearance)
-    const X = this.xs.data, Y = this.ys.data, Z = this.zs.data, SYS = this.sysOf.data
+    const X = this.xs.data, Y = this.ys.data, Z = this.zs.data, SYS = this.sysOf.data, REG = this.regionOf.data
     let made = 0
     for (let v = 0; v < this.xs.length; v++) {
       if (!this.isTip(v)) continue
       const other = 1 - SYS[v]
       let u = -1, best = reach * reach
-      this.grid.near(X[v], Y[v], Z[v], reach, X, Y, Z, (id, d2) => { if (SYS[id] === other && (d2 < best || (d2 === best && id < u))) { best = d2; u = id } })
+      this.grid.near(X[v], Y[v], Z[v], reach, X, Y, Z, (id, d2) => { if (SYS[id] === other && REG[id] === REG[v] && (d2 < best || (d2 === best && id < u))) { best = d2; u = id } })
       if (u < 0) continue
       if (!this.domain.joins(X[u], Y[u], Z[u], this.nxs.data[u], this.nys.data[u], this.nzs.data[u], X[v], Y[v], Z[v], this.nxs.data[v], this.nys.data[v], this.nzs.data[v], clear)) continue
       this.link(v, u)
@@ -659,8 +743,8 @@ export class Engine {
     const from = this.xs.length
     for (let s = 0; s < this.ax.length; s++) {
       if (this.used[s] !== LIVE) continue
-      const t = this.asys[s]
-      if (!(Math.sqrt(this.best[s * this.T + t]) < P.kill)) continue
+      const e = s * this.T + this.asys[s]
+      if (!(this.seen[e] >= 0 && Math.sqrt(this.seenD2[e]) < P.kill)) continue
       const found = this.neighbourhood(s, 0, P.kill).map(([v]) => v)
       if (!found.length) continue
       this.used[s] = USED; out.push(s)
@@ -678,27 +762,36 @@ export class Engine {
       this.ax[s], this.ay[s], this.az[s], this.anx[s], this.any[s], this.anz[s], clear))
   }
 
-  // The relative neighbourhood of source s among its own system's vein points that see it: v counts unless some u is
-  // nearer the source than v and nearer v than the source is (Runions 2005, Eq. 2). Nearest first. `within` limits the
-  // search to that distance instead of one set by the nearest vein point.
+  // The relative neighbourhood of source s among its own system's vein points that see it: v counts unless some u that
+  // sees it too is nearer the source than v and nearer v than the source is (Runions 2005, Eq. 2). A vein across a wall
+  // can't grow to the source, so it doesn't keep another from it. Nearest first, from the first RN_CANDIDATES points that
+  // see it. `within` limits the search to that distance instead of one set by the nearest vein point that sees it.
   private neighbourhood(s: number, nearest: number, within?: number): [number, number][] {
     const P = this.params, qx = this.ax[s], qy = this.ay[s], qz = this.az[s], t = this.asys[s], T = this.T
+    const first = this.seen[s * T + t], firstD2 = this.seenD2[s * T + t]
+    if (first < 0) return []
     const reach = within ?? Math.min(P.attraction > 0 ? P.attraction : Infinity, 2.5 * nearest + 2 * P.segment)
     const found: [number, number][] = []
     const X = this.xs.data, Y = this.ys.data, Z = this.zs.data, SYS = this.sysOf.data
     this.grid.near(qx, qy, qz, within ?? Math.max(reach, nearest * 1.000001 + 1e-9), X, Y, Z, (id, d2) => {
-      if (T === 1 || SYS[id] === t) found.push([id, Math.sqrt(d2)])
+      if (T === 1 || SYS[id] === t) found.push([id, d2])
     })
     found.sort((a, b) => a[1] - b[1] || a[0] - b[0])
-    const out: [number, number][] = []
-    for (let i = 0; i < found.length && i < RN_CANDIDATES; i++) {
-      const [v, dv] = found[i]
+    const seeing: number[] = [], out: [number, number][] = []
+    for (let i = 0; i < found.length && seeing.length < RN_CANDIDATES; i++) {
+      const [v, d2] = found[i]
+      // Points the caches know that are nearer than the nearest that sees the source don't see it; junctions made since
+      // are tested.
+      if (v < this.known && (d2 < firstD2 || (d2 === firstD2 && v < first))) continue
+      if (v !== first && !this.seesFresh(v, s)) continue
+      const dv = Math.sqrt(d2)
       let open = true
-      for (let k = 0; k < i && open; k++) {
-        const u = found[k][0]
+      for (let k = 0; k < seeing.length && open; k++) {
+        const u = seeing[k]
         if (Math.hypot(X[u] - X[v], Y[u] - Y[v], Z[u] - Z[v]) <= dv) open = false
       }
-      if (open && (v === this.owner[s * T + t] ? this.seesNearest(s, t) : this.seesFresh(v, s))) out.push([v, dv])
+      seeing.push(v)
+      if (open) out.push([v, dv])
     }
     return out
   }

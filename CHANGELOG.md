@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0 2026-11-23
+
+Veins now reach round folds and thin walls.
+
+- **Each attractor pulls the nearest vein that can see it.** Before, it pulled only its nearest vein. When that vein was across a wall, a fold or a floor, it couldn't grow there, and the attractor waited for good. Now a vein on the attractor's own side grows to it.
+- **Folded and thin models fill much further.** Inside the brain, 31 of 3,000 attractors are left, not 212, and growth ends Done instead of Stopped. Over the brain, 326 are left, not 776. Roots round a pot now cover the springpot's inside walls and floor: 31 of the pot's 1,870 attractors are left, not 945.
+- **Veins stay on their own piece of the model.** On the surface, a vein could step across a narrow gap onto another piece. With 1.0.0, 26 vein points crossed the 1 mm gap from the springpot onto its saucer, a separate piece with no root of its own. The new pairing brings veins down to the pot's foot, and 1,332 would have crossed. A print joins the two parts wherever a vein crosses. Now a vein never crosses from one piece to another. The saucer's attractors wait for a root of their own, and the status says how many are on a part with no root.
+- **The presets grow as before,** give or take a few attractors.
+- **Growth stays quick.** Inside, a vein that sees an attractor counts only if it is at most one kill distance farther away than the nearest vein. Testing every vein would make a step in the brain about ten times slower. On the surface, where seeing is a quick test of two normals, any vein counts. The brain grows in 0.70 s inside and 0.83 s over its surface.
+- **Loops:** a vein across a wall no longer keeps another vein from joining a source.
+- **Projects saved with 1.0.0 open as before,** and grow on with the new pairing.
+
 ## 1.0.0 2026-11-23
 
 The first release.

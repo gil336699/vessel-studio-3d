@@ -2,7 +2,7 @@
 
 Vessel Studio 3D is a browser app that grows blood vessels, roots, coral and trees in 3D by space colonization (Runions, Lane and Prusinkiewicz 2007).
 
-- Attractors are scattered through a model or over its surface. Each one pulls on its nearest vein, and veins grow toward them a step at a time until every attractor is reached.
+- Attractors are scattered through a model or over its surface. Each one pulls on the nearest vein that can see it, and veins grow toward them a step at a time until every attractor is reached.
 - **Inside**, veins fill a closed model, like vessels in an organ or a tree in its crown. **On the surface**, they grow across the skin and stay on it, like vessels over a heart or roots round a pot.
 - Grow one system, or two or three together. Two can **join**: an inlet tree and an outlet tree grow toward each other and meet, so the network runs from inlet to outlet (mutual tree attraction, Kinstlinger et al. 2020). Two or three can **interweave**: they fill the same space and never touch.
 - Veins thicken toward their roots by Murray's law.
@@ -15,7 +15,7 @@ It is the 3D companion of [Vessel Studio](https://github.com/gil336699/vessel-st
 
 ![Vessel Studio 3D in use: Speed is set to 1, and vessels grow through a see-through kidney from the dent where they enter; Inlet to outlet grows a red and a purple tree from the two ends of a lens until they meet and join; Surface vessels grow over a heart; Gil's woven vase, weave.stl, is opened and vessels grow over its surface; and the veins are exported as a watertight STL of 1,168,784 triangles. Growth plays at the app's real speed for Speed 1, about 60 steps a second.](docs/demo.gif)
 
-[Watch the demo as a video](https://github.com/gil336699/vessel-studio-3d/releases/download/v1.0.0/vessel-studio-3d-demo.mp4) (MP4, 1920 × 1080, 29 seconds).
+[Watch the demo as a video](https://github.com/gil336699/vessel-studio-3d/releases/download/v1.0.0/vessel-studio-3d-demo.mp4) (MP4, 1920 × 1080, 29 seconds, recorded with 1.0.0).
 
 ![The eight presets, grown in the app: Organ vessels fill a kidney from its dent; Tree climbs a trunk into its crown; Coral wanders through a ball; Surface vessels run over a heart; Lattice joins into a net over a vase; Roots round a pot grow down from the rim; Inlet to outlet joins a red and a purple tree inside a lens, with the joins in yellow; Two interwoven fills the same lens with two systems that never touch.](docs/presets.png)
 
@@ -190,12 +190,12 @@ On Windows, use Ctrl for ⌘. On a touch screen, one finger orbits and two finge
 
 Each step does three things.
 
-1. **Pair.** Every live attractor finds its nearest vein point in the system it feeds. If that point is closer than the kill distance and can see it, the attractor is used up. Otherwise the attractor pulls it, if the point is within the attraction distance and can see it. With Loops on, it pulls every vein point of its relative neighbourhood instead.
-   - **Inside**, a point sees an attractor when the straight line between them stays inside the model, clear of the wall by the edge clearance.
-   - **On the surface**, a point sees an attractor when their surface normals are less than 120° apart, so veins never pair across a thin wall or a narrow gap.
+1. **Pair.** Every live attractor finds the nearest vein point that can see it, in the system it feeds. If that point is closer than the kill distance, the attractor is used up. Otherwise the attractor pulls it, if it is within the attraction distance. In a folded model the nearest vein is often just across a wall, where it can't grow to the attractor, so a vein on the attractor's own side grows to it instead. With Loops on, an attractor pulls every vein point of its relative neighbourhood among those that see it.
+   - **Inside**, a point sees an attractor when the straight line between them stays inside the model, clear of the wall by the edge clearance. Only a point at most one kill distance farther away than the nearest vein point counts. Testing every vein would make a step in the brain about ten times slower, and a vein just round the fold is the one that matters.
+   - **On the surface**, a point sees an attractor when both are on the same piece of the model and their surface normals are less than 120° apart, so veins never pair across a thin wall, a narrow gap or a gap between parts. Seeing is a quick test here, so any vein that sees an attractor counts, however far: a pot's inside walls reach its floor.
 2. **Grow.** Every pulled point grows one new point a segment length away, toward the average direction of its attractors, blended with Keep heading, Wiggle and Pull.
    - **Inside**, a step that would leave the model, or come nearer the wall than the edge clearance anywhere along it, is refused.
-   - **On the surface**, a step is laid along the skin. It lands on the nearest point of the surface, and at an edge it turns over the edge as the surface does, up to four times a step. A step that would jump to another sheet, or come nearer an open rim than the edge clearance, is refused.
+   - **On the surface**, a step is laid along the skin. It lands on the nearest point of the surface, and at an edge it turns over the edge as the surface does, up to four times a step. A step that would jump to another sheet or another piece of the model, or come nearer an open rim than the edge clearance, is refused. Pieces are told apart by the corners their triangles share, so a vein never crosses the gap between a pot and its saucer, which a print would join.
    - With Loops off, a refused step uses up the attractors it would have reached, since a vein or the wall already fills that space.
 3. **Add.** The step's new points go in together, so the result never depends on the order points are visited.
 
@@ -209,14 +209,14 @@ Each step does three things.
 
 These rules make it fast and repeatable:
 
-- **A cached nearest point.** Each attractor's nearest vein point is cached and updated with only each step's new points, through a small k-d tree. That is exact, because vein points never move, and ties go to the older point, as a full search would. Whether a point sees an attractor is cached for its nearest point.
-- **The same result every time.** Everything is seeded, and the project file holds the whole state, the random generator's included. A test checks that a run saved half way and carried on ends bit for bit like one grown straight through. In the app, a kidney saved at step 25, reloaded and grown on ended with the same 7,046 vein points as one grown straight through.
+- **Cached nearest points.** Each attractor's nearest vein point, and its nearest one that can see it, are cached and updated with only each step's new points, through a small k-d tree. That is exact, because vein points never move and whether one sees an attractor never changes, and ties go to the older point, as a full search would. Every vein point nearer than the one that sees an attractor is known not to see it, so new points are tested nearest first, and only until one sees it.
+- **The same result every time.** Everything is seeded, and the project file holds the whole state, the random generator's included. A test checks that a run saved half way and carried on ends bit for bit like one grown straight through. In the app, a kidney saved at step 25, reloaded and grown on ended with the same 7,074 vein points as one grown straight through. A project the app saved at 1.0.0 opens and grows on too, with a test that it always will.
 - **Workers.** Growth runs off the page and sends one frame at a time, after the page has drawn the last one. Frames carry only new points. A second worker builds the tubes for export. The view draws all the tubes as copies of one shape.
 
 **An honest note on its limits:**
 
 - It is a picture-making model, not a physiological one. Veins grow toward free space, not toward tissue that needs blood, and widths follow Murray's law from the ends each vein feeds, not a flow solve. Join makes a network that runs from inlet to outlet, but no flow is worked out through it.
-- Each attractor pairs with its nearest vein point only. When that point can't see it, because it is across a wall, a fold or a floor, the attractor waits, and a vein a little further away that could see it isn't asked. On thin or deeply folded models many attractors are left: see [Gil's models](#gils-models).
+- Inside, an attractor whose nearest vein point that sees it is more than a kill distance farther away than its nearest vein waits, until a vein grows nearer. A part with no vein in it, such as a separate piece of the STL, needs a root of its own: see [Gil's models](#gils-models).
 - Interweave keeps systems apart by narrowing tubes where they pass close, not by moving them. Guy et al. (2020) move vessels apart instead.
 - The edge clearance from rims is measured in straight lines. On a crumpled sheet whose ruffled rim folds back near its middle, it can stop growth at once: set it to 0 there.
 
@@ -228,16 +228,16 @@ Measured on 2026-11-23 on this Mac (Apple M1 Max). In-app numbers come from the 
 
 | Preset | Model, where | Attractors | Grown in | Vein points | Attractors left | Loops, joins |
 | --- | --- | --- | --- | --- | --- | --- |
-| Organ vessels | Kidney, inside | 3,000 | 0.39 s | 5,803 | 10 | |
-| Tree | Tree, inside | 2,500, near the wall | 0.62 s | 4,948 | 4 | |
+| Organ vessels | Kidney, inside | 3,000 | 0.37 s | 5,745 | 4 | |
+| Tree | Tree, inside | 2,500, near the wall | 0.64 s | 4,967 | 5 | |
 | Coral | Sphere, inside | 4,000, random | 0.67 s | 12,292 | 0 | |
-| Surface vessels | Heart, surface | 3,000 | 0.73 s | 5,043 | 0 | |
-| Lattice | Vase, surface | 2,500 | 1.48 s | 7,094 | 1 | 1,089 loops |
-| Roots round a pot | Pot, surface | 2,500 | 0.75 s | 5,629 | 2 | |
-| Inlet to outlet | Lens, inside, Join | 900, shared | 0.59 s | 3,353 | 7 | 397 joins, 329 dead ends trimmed |
-| Two interwoven | Lens, inside, Interweave | 3,000 each | 1.16 s | 9,982 | 234 of 6,000 | Closest gap 0.60 mm, as set |
+| Surface vessels | Heart, surface | 3,000 | 0.71 s | 5,064 | 0 | |
+| Lattice | Vase, surface | 2,500 | 1.46 s | 7,094 | 1 | 1,089 loops |
+| Roots round a pot | Pot, surface | 2,500 | 0.74 s | 5,629 | 2 | |
+| Inlet to outlet | Lens, inside, Join | 900, shared | 0.56 s | 3,427 | 6 | 467 joins, 311 dead ends trimmed |
+| Two interwoven | Lens, inside, Interweave | 3,000 each | 1.14 s | 9,982 | 234 of 6,000 | Closest gap 0.60 mm, as set |
 
-At the default Speed of 3 steps a frame, growth is held to the screen: about 170 steps a second (Coral grew 112 steps in 0.67 s, Surface vessels 127 in 0.73 s).
+At the default Speed of 3 steps a frame, growth is held to the screen: about 170 steps a second (Coral grew 112 steps in 0.67 s, Surface vessels 123 in 0.71 s). Over six seeds, 1.1 left as many attractors as 1.0.0 on these models, give or take a few: 33 and 33 in all for Tree, 26 and 26 for Organ vessels, 10 and 12 for Surface vessels.
 
 ### Gil's models
 
@@ -245,17 +245,29 @@ Gil's STL files, each opened in the app and grown with Organ vessels (inside) an
 
 | Model | Triangles | Size | Preparing to grow inside | Inside: vein points, attractors left | On the surface: vein points, attractors left |
 | --- | --- | --- | --- | --- | --- |
-| weave.stl, open | 1,752 | 90 × 90 × 90 mm | 2.0 s | 12,140, 21 of 3,000 | 5,904, 4 of 3,000 |
-| nih-brain.stl | 250,000 | 169 × 133 × 139 mm | 2.1 s | 7,835, 212 of 3,000 | 9,601, 776 of 3,000 |
-| ZuluTag_v3.stl | 3,002 | 47 × 7 × 29 mm | 0.7 s | 2,317, 589 of 3,000 | 5,644, 169 of 3,000 |
-| springpot.stl | 6,882 | 120 × 120 × 122 mm | 3.3 s | 486, 1,725 of 3,000 | 6,278, 1,707 of 3,000 |
+| weave.stl, open | 1,752 | 90 × 90 × 90 mm | 2.0 s | 12,136, 22 of 3,000 | 5,843, 10 of 3,000 |
+| nih-brain.stl | 250,000 | 169 × 133 × 139 mm | 2.4 s | 8,975, 31 of 3,000 | 11,576, 326 of 3,000 |
+| ZuluTag_v3.stl | 3,002 | 47 × 7 × 29 mm | 0.7 s | 2,298, 590 of 3,000 | 6,371, 86 of 3,000 |
+| springpot.stl | 6,882 | 120 × 120 × 122 mm | 3.2 s | 486, 1,725 of 3,000 | 8,706, 781 of 3,000 (735 on the saucer, with no root) |
 | Untitled.stl, open | 181,364 | 28 × 33 × 4 mm | 0.7 s | No room for a root | 3, 2,994 of 3,000 |
 
-Preparing to grow inside includes placing the attractors. Preparing to grow on the surface took 0.44 s for the brain and 0.76 s for Untitled.stl.
+Preparing to grow inside includes placing the attractors. Preparing to grow on the surface took 0.5 s for the brain and 0.8 s for Untitled.stl. Growing took 0.70 s inside the brain and 0.83 s over it.
 
-- **Folds.** On the brain's surface the veins cover the tops of the folds and leave most of the narrow valleys between them: 776 of 3,000 attractors are left.
-- **Thin walls.** Inside fills only what is at least the edge clearance from the wall. The springpot's deepest point is 3.4 mm under its skin, so Inside grew 486 vein points and left 1,725 of 3,000 attractors.
-- **Inside a pot, and separate parts.** Roots round a pot on the springpot grew 5,952 vein points down its walls, but left 1,481 of 2,500 attractors, mostly on its inside floor and on its saucer. The saucer is a separate piece of the STL, with no root of its own.
+With 1.0.0, each attractor pulled only its nearest vein, even one across a wall or a fold that couldn't grow to it. These files left many more then:
+
+| Model | Inside: attractors left, 1.0.0 → 1.1 | On the surface: attractors left, 1.0.0 → 1.1 |
+| --- | --- | --- |
+| weave.stl | 21 → 22 | 4 → 10 |
+| nih-brain.stl | 212 → 31 | 776 → 326 |
+| ZuluTag_v3.stl | 589 → 590 | 169 → 86 |
+| springpot.stl | 1,725 → 1,725 | 1,707 → 781, 735 of them on the saucer |
+
+Inside the brain, 1.1 left fewer with every seed tried: 212 → 31, 214 → 58, 216 → 42, 219 → 49, 220 → 43 and 230 → 41.
+
+- **Folds.** Inside the brain, the veins now reach into its folds and growth ends Done. Over its surface, 326 of 3,000 attractors are still left.
+- **Thin walls.** Inside fills only what is at least the edge clearance from the wall. The springpot's deepest point is 3.4 mm under its skin, so Inside grew 486 vein points and left 1,725 of 3,000 attractors, as before. The ZuluTag is the same: no vein can reach 590 of its attractors inside.
+- **Inside a pot.** Roots round a pot on the springpot now grow over the rim, down the pot's inside walls and over its floor. On the pot, 31 of its 1,870 attractors are left (945 with 1.0.0), and 395 vein points cover the inside floor (1 with 1.0.0).
+- **Separate parts.** The springpot's saucer is a separate piece of the STL. The pot's foot sits in it, and elsewhere a 1 mm gap separates them. Veins never cross from one piece to another, as a print would join them there. So all 630 of the saucer's attractors wait for a root of their own, and the status says so. (While 1.1 was being made, veins that reached the pot's foot stepped across the gap: 1,332 vein points on the saucer. 1.0.0 had put 26 there.)
 - **Crumpled sheets.** Untitled.stl is a ruffled sheet. Its deepest point is 0.22 mm under the skin, so it has no room inside. On its surface, the root sits 0.48 mm from the ruffled rim in a straight line, and with the 0.33 mm edge clearance growth stopped after 3 vein points. With Edge clearance at 0, the app's engine grew 2,569 vein points there (measured in Node), leaving 1,238 of 3,000 attractors.
 
 ### Exports
@@ -264,16 +276,16 @@ The five designer jobs, each grown and exported at Normal detail through the Exp
 
 | Job | Model | Preset | Vein points, attractors left | File | Triangles | Size | Made in |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Vessels inside an organ | nih-brain.stl | Organ vessels | 7,835, 212 of 3,000 | STL | 1,353,784 | 67.7 MB | 4.2 s |
-| | | | | 3MF | 1,353,784 | 15.8 MB | 5.5 s |
-| Vessels over a heart | Heart | Surface vessels | 5,043, 0 | 3MF with the model | 1,085,436 | 12.4 MB | 4.3 s |
-| | | | | STL, veins alone | 1,035,572 | 51.8 MB | 4.9 s |
-| A lamp shade lattice | Vase | Lattice | 7,094, 1 (1,089 loops) | STL | 1,493,248 | 74.7 MB | 5.5 s |
+| Vessels inside an organ | nih-brain.stl | Organ vessels | 8,975, 31 of 3,000 | STL | 1,468,668 | 73.4 MB | 4.6 s |
+| | | | | 3MF | 1,468,668 | 17.2 MB | 5.6 s |
+| Vessels over a heart | Heart | Surface vessels | 5,064, 0 | 3MF with the model | 1,089,348 | 12.5 MB | 4.2 s |
+| | | | | STL, veins alone | 1,039,484 | 52.0 MB | 4.3 s |
+| A lamp shade lattice | Vase | Lattice | 7,094, 1 (1,089 loops) | STL | 1,493,248 | 74.7 MB | 5.6 s |
 | | | | | OBJ centre lines | 7,094 points | 0.3 MB | |
-| Roots round a pot | springpot.stl | Roots round a pot | 5,952, 1,481 of 2,500 | 3MF with the model | 1,453,666 | 16.5 MB | 5.7 s |
-| A tree to print | Tree | Tree | 4,948, 4 | STL | 784,912 | 39.2 MB | 3.1 s |
+| Roots round a pot | springpot.stl | Roots round a pot | 10,689, 661 of 2,500 (630 on the saucer, with no root) | 3MF with the model | 1,989,030 | 22.8 MB | 7.1 s |
+| A tree to print | Tree | Tree | 4,967, 5 | STL | 780,940 | 39.0 MB | 3.2 s |
 
-Every file came out watertight by the app's own check. The four STLs were read back and welded again, as a slicer does: none has an open edge, and each is one connected piece.
+Every file came out watertight by the app's own check. The four STLs were read back and welded again, as a slicer does: none has an open edge, and each is one connected piece. The pot's 3MF is 22.8 MB, not 16.5 MB as with 1.0.0, as the veins now cover the pot inside and out.
 
 ### Growth at larger counts
 
@@ -281,19 +293,20 @@ The app's engine in Node, as the worker runs it, at up to the most attractors th
 
 | Design | Attractors | Placing them | Steps | Vein points | Attractors left | Growing | Per step |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Organ vessels, kidney | 3,000 | 0.03 s | 63 | 5,803 | 10 | 0.10 s | 1.6 ms |
-| | 20,000 | 0.22 s | 56 | 11,455 | 0 | 0.52 s | 9.2 ms |
-| | 60,000 | 0.67 s | 56 | 14,677 | 0 | 1.52 s | 27.2 ms |
-| Surface vessels, heart | 3,000 | 0.02 s | 127 | 5,043 | 0 | 0.08 s | 0.6 ms |
-| | 20,000 | 0.15 s | 123 | 7,983 | 0 | 0.42 s | 3.4 ms |
-| | 60,000 | 0.49 s | 122 | 9,613 | 0 | 1.31 s | 10.8 ms |
+| Organ vessels, kidney | 3,000 | 0.03 s | 58 | 5,745 | 4 | 0.11 s | 1.8 ms |
+| | 20,000 | 0.23 s | 57 | 11,318 | 0 | 0.58 s | 10.1 ms |
+| | 60,000 | 0.73 s | 57 | 14,421 | 0 | 1.72 s | 30.1 ms |
+| Surface vessels, heart | 3,000 | 0.02 s | 123 | 5,064 | 0 | 0.10 s | 0.8 ms |
+| | 20,000 | 0.15 s | 122 | 8,163 | 0 | 0.47 s | 3.9 ms |
+| | 60,000 | 0.51 s | 122 | 10,080 | 0 | 1.49 s | 12.2 ms |
 
-Preparing the kidney's inside took 0.8 s. At 3,000 attractors the engine grows exactly what the app does: 5,803 and 5,043 vein points.
+Preparing the kidney's inside took 0.8 s. At 3,000 attractors the engine grows exactly what the app does: 5,745 and 5,064 vein points. A step takes up to 15 % longer than with 1.0.0 here. In the folded brain a step inside takes 5.8 ms on average, against 2.1 ms with 1.0.0, and the slowest 16 ms; testing every vein, with no limit, took 52 ms on average and 180 ms at worst.
 
 ### Other limits
 
 - **Caps:** STL files up to 1,500,000 triangles, 60,000 attractors (each, with Interweave), 400,000 vein points, and 24 million grid points for the tubes. Growth stops at the vein point cap and says so.
 - **Big prints make big files:** 0.8 to 1.5 million triangles and 39 to 75 MB as STL for the designer jobs. A 3MF is about a quarter of the size.
+- **Veins never cross between separate pieces of a model.** Give each piece its own root; the status says when attractors are left on a piece without one.
 - **The design isn't kept in the browser between visits.** Save a project to keep it. Closing or reloading the page with unsaved veins asks first.
 - **Interwoven systems are narrowed apart only when growth pauses,** so the closest gap shows then. Exports always use the veins as they are once growth has stopped.
 - **Tested in Chrome on a Mac.** Safari, Firefox and touch devices haven't been tried yet, and no export has been sliced or printed yet.
