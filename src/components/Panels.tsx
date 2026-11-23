@@ -9,10 +9,11 @@ import { Icon } from './Icon'
 
 type Change = (patch: Partial<Settings>, key?: string | null) => void
 
-export function ModelPanel({ s, change, modelName, triangles, open, info, size, onSize, onModel, onOpenStl, onDefaultRoots, onRimRoots, onClearRoots, roots, busy }: {
+export function ModelPanel({ s, change, modelName, triangles, open, info, size, onSize, onModel, onOpenStl, onDefaultRoots, onRimRoots, onClearRoots, roots, busy, rootPlace, setRootPlace }: {
   s: Settings; change: Change; modelName: string; triangles: number; open: boolean; info: DomainInfo | null; size: number
   onSize: (mm: number) => void; onModel: (id: ModelId) => void; onOpenStl: () => void
   onDefaultRoots: () => void; onRimRoots: () => void; onClearRoots: () => void; roots: number; busy: string | false
+  rootPlace: 'skin' | 'middle'; setRootPlace: (place: 'skin' | 'middle') => void
 }) {
   const inside = s.mode === 'inside'
   return <>
@@ -60,7 +61,11 @@ export function ModelPanel({ s, change, modelName, triangles, open, info, size, 
       </div>
     </Section>
     <Section title="Roots" tip="Where veins start. Click the model with the Roots tool (O) to add one.">
-      <p className="hint">{roots ? `${count(roots)} ${roots === 1 ? 'root' : 'roots'}.` : 'No roots yet.'} {inside ? 'Click the model with the Roots tool: the vessel enters there.' : 'Click the model with the Roots tool to add one.'}</p>
+      <p className="hint">{roots ? `${count(roots)} ${roots === 1 ? 'root' : 'roots'}.` : 'No roots yet.'} Click the model with the Roots tool (O) to add one.</p>
+      {inside && <Segmented label="A click puts a root" value={rootPlace} onChange={setRootPlace} options={[
+        { value: 'skin', label: 'On the skin', tip: 'The vessel enters the model where you click, as an artery enters an organ. Shift-click for the middle instead.' },
+        { value: 'middle', label: 'In the middle', tip: 'The root starts deep inside, halfway through the model under the click. Shift-click for the skin instead.' },
+      ]} />}
       <div className="button-row">
         <Button unavailable={busy} tip="Put roots back on the model’s own spots, one for each system." onClick={onDefaultRoots}>Model’s spots</Button>
         <Button unavailable={busy || (!open && 'This model has no open rim.') || (inside && 'Roots along the rim are for growing On the surface.')} tip="Six roots spread along the model’s open rim, as for roots round a pot." onClick={onRimRoots}>Along the rim</Button>
@@ -150,14 +155,18 @@ export function LookPanel({ s, change }: { s: Settings; change: Change }) {
   </>
 }
 
-export function ExportPanel({ s, onStl, on3mf, onObj, onPng, onSave, onOpen, detail, setDetail, transparent, setTransparent, exporting, nothing, estimate }: {
+export function ExportPanel({ s, onStl, on3mf, onObj, onPng, onSave, onOpen, detail, setDetail, transparent, setTransparent, exporting, nothing, estimate, joined, setJoined, open }: {
   s: Settings; onStl: () => void; on3mf: () => void; onObj: () => void; onPng: (scale: number) => void; onSave: () => void; onOpen: () => void
   detail: Detail; setDetail: (d: Detail) => void; transparent: boolean; setTransparent: (on: boolean) => void
-  exporting: string | false; nothing: string | false; estimate: string
+  exporting: string | false; nothing: string | false; estimate: string; joined: boolean; setJoined: (on: boolean) => void; open: boolean
 }) {
   const busy = exporting
   return <>
     <Section title="To print" tip="The veins as tubes: one watertight solid, ready for a slicer.">
+      {s.mode === 'surface' && <Segmented label="Print" value={joined && !open ? 'joined' : 'alone'} onChange={v => setJoined(v === 'joined')} options={[
+        { value: 'alone', label: 'Veins alone', tip: 'Just the veins, as one lattice where they join: a lamp shade or a vase of veins.' },
+        { value: 'joined', label: 'With the model', unavailable: open && 'An open sheet has no thickness to join veins to. Print the veins alone, or close the model in your CAD app.', tip: 'The model and its raised veins together, as two parts of one object that your slicer joins as it slices.' },
+      ]} />}
       <Segmented label="Detail" value={detail} onChange={setDetail} options={[
         { value: 'draft', label: 'Draft', tip: 'A coarser surface and a smaller file, quick to make.' },
         { value: 'normal', label: 'Normal', tip: 'Smooth tubes for most prints.' },

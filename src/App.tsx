@@ -6,11 +6,11 @@ import { ConfirmDialog, HelpDialog, QuickStart, type Pending } from './component
 import { ExportPanel, GrowPanel, LookPanel, ModelPanel } from './components/Panels'
 import { TabPanel, Tabs } from './components/Tabs'
 import { TooltipLayer } from './components/Tooltip'
-import { Viewport, type ViewHandle } from './components/Viewport'
+import { Viewport, type Pick, type ViewHandle } from './components/Viewport'
 import { builtInModel, defaultRequests, longestSide, modelDoc, rootRequests, scaleMesh, type Design } from './lib/design'
 import { centreLines, stlFile, threeMf } from './lib/exports'
 import { bytes, count } from './lib/format'
-import { openEdges, type MeshData, type Vec3 } from './lib/mesh'
+import { openEdges, type MeshData } from './lib/mesh'
 import { MODELS, type ModelId } from './lib/models'
 import { EXTENSION, parseProject, ProjectError, projectJson } from './lib/project'
 import { saveFile } from './lib/saveFile'
@@ -57,6 +57,10 @@ export function App() {
   const [showQuickStart, setShowQuickStart] = useState(() => storage.get(QUICK_START_KEY) !== '1')
   const [pending, setPending] = useState<Pending | null>(null)
   const [rooting, setRooting] = useState(false)
+  // Inside: whether a click puts a root where it lands on the skin, or in the middle of the model under it.
+  const [rootPlace, setRootPlace] = useState<'skin' | 'middle'>('skin')
+  // On the surface: print the veins alone, or joined to the model as raised veins.
+  const [joined, setJoined] = useState(false)
   const [chosenSystem, setSystem] = useState(0)
   // The system the next root starts: the chosen one, while there are that many.
   const system = chosenSystem < s.systems ? chosenSystem : 0
@@ -129,10 +133,14 @@ export function App() {
     setStatus({ text: `${p.label}: ${p.tip} Press Grow.` })
   }
 
-  const onPick = (point: Vec3, normal: Vec3) => {
+  const onPick = (pick: Pick) => {
     if (!rooting) return
-    model.addRoot({ kind: 'skin', point, normal, system: Math.min(system, s.systems - 1) })
-    setStatus({ text: `${s.mode === 'inside' ? 'Added a root: the vessel enters the model there.' : 'Added a root.'}${s.systems > 1 ? ` It starts system ${SYSTEM_NAMES[Math.min(system, s.systems - 1)]}.` : ''}${stats.step > 0 ? ' It grows a vein of its own. Undo removes it.' : ''}` })
+    const t = Math.min(system, s.systems - 1)
+    // Inside, a root can enter at the click or start in the middle of the model under it (or Shift-click).
+    const middle = s.mode === 'inside' && (rootPlace === 'middle') !== pick.shift && pick.middle
+    model.addRoot(middle ? { kind: 'inside', point: middle, system: t } : { kind: 'skin', point: pick.point, normal: pick.normal, system: t })
+    const where = middle ? 'Added a root in the middle of the model, under the click.' : s.mode === 'inside' ? 'Added a root: the vessel enters the model there.' : 'Added a root.'
+    setStatus({ text: `${where}${s.systems > 1 ? ` It starts system ${SYSTEM_NAMES[t]}.` : ''}${stats.step > 0 ? ' It grows a vein of its own. Undo removes it.' : ''}` })
   }
 
   // Files.
@@ -192,13 +200,16 @@ export function App() {
     setStatus({ text: 'Building the watertight tube skin… This can take a few seconds for many veins.' })
     try {
       const skin = await buildSkin()
-      const tris = skin.parts.reduce((n, p) => n + p.indices.length / 3, 0)
       const problems = skin.parts.reduce((n, p) => n + p.problems, 0)
-      const data = kind === 'stl' ? stlFile(skin.parts, 'Vessel Studio 3D') : await threeMf(skin.parts, baseName)
+      // Joined: the model goes in as well, as another part of the same object; the slicer joins them into one solid.
+      const withModel = s.mode === 'surface' && joined && !open
+      const parts = withModel ? [...skin.parts, { name: 'Model', color: s.modelColor, positions: design.model.mesh.positions, indices: design.model.mesh.indices, problems: 0 }] : skin.parts
+      const tris = parts.reduce((n, p) => n + p.indices.length / 3, 0)
+      const data = kind === 'stl' ? stlFile(parts, 'Vessel Studio 3D') : await threeMf(parts, baseName, withModel)
       const size = data instanceof Blob ? data.size : data.byteLength
       const result = await saveFile(`${baseName}.${kind}`, data, kind === 'stl' ? 'model/stl' : 'model/3mf', kind === 'stl' ? 'STL model' : '3MF model')
       if (result === 'saved' || result === 'downloaded') setStatus({
-        text: `${kind.toUpperCase()} ${result}: ${count(tris)} triangles, ${bytes(size)}, ${problems ? `${count(problems)} open edges` : 'watertight'}, made in ${(skin.ms / 1000).toFixed(1)} s.${skin.tipLimited ? ' The finest tips are rounder than the grid allowed at this size: use Fine, or wider tips, for smoother tips.' : ''}`,
+        text: `${kind.toUpperCase()} ${result}: ${count(tris)} triangles, ${bytes(size)}, ${problems ? `${count(problems)} open edges` : 'watertight'}, made in ${(skin.ms / 1000).toFixed(1)} s.${s.mode === 'surface' && joined && !open ? ' The veins and the model are two parts of one object, which your slicer joins as it slices.' : ''}${skin.tipLimited ? ' The finest tips are rounder than the grid allowed at this size: use Fine, or wider tips, for smoother tips.' : ''}`,
         warning: problems > 0,
       })
       else if (result === 'failed') setStatus({ text: 'The file couldn’t be saved. Try again.', warning: true })
@@ -306,6 +317,7 @@ export function App() {
       <TabPanel idBase="design" id="model" value={tab}>
         <ModelPanel s={s} change={change} modelName={modelName} triangles={design.model.mesh.indices.length / 3} open={open} info={model.info} size={size}
           onSize={resize} onModel={pickModel} onOpenStl={() => stlInput.current?.click()} roots={roots} busy={running && 'Pause the growth first.'}
+          rootPlace={rootPlace} setRootPlace={place => { setRootPlace(place); setRooting(true) }}
           onDefaultRoots={() => void model.setRoots(defaultRequests(design), 'Roots are back on the model’s own spots.')}
           onRimRoots={() => void model.setRoots([{ kind: 'rim', count: 6, systems: s.systems }], 'Six roots along the rim.')}
           onClearRoots={() => { void model.setRoots([], 'Roots cleared. Click the model with the Roots tool (O) to add your own.'); setRooting(true) }} />
@@ -314,6 +326,7 @@ export function App() {
       <TabPanel idBase="design" id="look" value={tab}><LookPanel s={s} change={change} /></TabPanel>
       <TabPanel idBase="design" id="export" value={tab}>
         <ExportPanel s={s} detail={detail} setDetail={setDetail} transparent={transparent} setTransparent={setTransparent} exporting={exporting} nothing={nothing} estimate={estimate}
+          joined={joined} setJoined={setJoined} open={open}
           onStl={() => void exportSkin('stl')} on3mf={() => void exportSkin('3mf')} onObj={() => void exportObj()} onPng={scale => void exportPng(scale)}
           onSave={() => void saveProject()} onOpen={openProject} />
       </TabPanel>

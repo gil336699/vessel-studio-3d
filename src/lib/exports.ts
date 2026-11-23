@@ -19,8 +19,9 @@ export const stlFile = (parts: MeshData[], name: string) => {
   return writeStl({ positions, indices }, name)
 }
 
-// 3MF: millimetres, one object per part with its own colour, all in one build.
-export async function threeMf(parts: (MeshData & { name: string; color: string })[], title: string): Promise<Blob> {
+// 3MF: millimetres, one object per part with its own colour, all in one build. together: the parts are components of
+// one object, which slicers treat as a single object and join where its parts overlap.
+export async function threeMf(parts: (MeshData & { name: string; color: string })[], title: string, together = false): Promise<Blob> {
   const xml: string[] = []
   xml.push('<?xml version="1.0" encoding="UTF-8"?>')
   xml.push('<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">')
@@ -38,8 +39,11 @@ export async function threeMf(parts: (MeshData & { name: string; color: string }
     for (let i = 0; i < I.length; i += 3) tris.push(`<triangle v1="${I[i]}" v2="${I[i + 1]}" v3="${I[i + 2]}"/>`)
     xml.push(tris.join(''), '</triangles></mesh></object>')
   })
+  const whole = parts.length + 2
+  if (together) xml.push(`<object id="${whole}" type="model" name="${title.replace(/[<&>"]/g, '')}"><components>${parts.map((_, k) => `<component objectid="${k + 2}"/>`).join('')}</components></object>`)
   xml.push('</resources><build>')
-  parts.forEach((_, k) => xml.push(`<item objectid="${k + 2}"/>`))
+  if (together) xml.push(`<item objectid="${whole}"/>`)
+  else parts.forEach((_, k) => xml.push(`<item objectid="${k + 2}"/>`))
   xml.push('</build></model>')
   const enc = new TextEncoder()
   return zip([

@@ -147,7 +147,9 @@ export function applyPreset(s: Settings, name: PresetName, size: number): Settin
   if (name === 'tree') { lengths.kill = Number((3 * size / 100).toFixed(2)); lengths.maxWidth = Number((9 * size / 100).toFixed(2)); lengths.tipWidth = Number((1 * size / 100).toFixed(2)) }
   if (name === 'lattice') lengths.kill = Number((1.6 * size / 100).toFixed(2))
   if (name === 'join') { lengths.segment = Number((1 * size / 100).toFixed(2)); lengths.kill = Number((2 * size / 100).toFixed(2)); lengths.maxWidth = Number((4 * size / 100).toFixed(2)) }
-  return sanitizeSettings({ ...s, ...preset.values, ...lengths })
+  // Glass shows veins inside a model; on its surface they need a solid one to sit on.
+  const mode = preset.values.mode ?? s.mode
+  return sanitizeSettings({ ...s, ...preset.values, ...lengths, modelLook: mode === 'surface' ? 'solid' : 'glass' })
 }
 
 // The roots a model starts with, by rule.

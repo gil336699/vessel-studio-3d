@@ -5,7 +5,7 @@ import { OrbitControls } from '@react-three/drei'
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { type ComponentRef, type MutableRefObject, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import {
-  BackSide, BufferAttribute, BufferGeometry, Color, DirectionalLight, FrontSide, InstancedBufferAttribute, InstancedBufferGeometry, Mesh,
+  BackSide, BufferAttribute, BufferGeometry, Color, DirectionalLight, DoubleSide, FrontSide, InstancedBufferAttribute, InstancedBufferGeometry, Mesh,
   MeshStandardMaterial, NeutralToneMapping, PerspectiveCamera, TOUCH, Vector3, MOUSE,
 } from 'three'
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from 'three-mesh-bvh'
@@ -157,7 +157,11 @@ function VeinMesh({ view, colors }: { view: VeinView; colors: string[] }) {
   return <mesh geometry={geometry} material={material} frustumCulled={false} />
 }
 
-function ModelMesh({ mesh, look, color, picking, onPick }: { mesh: MeshData; look: Settings['modelLook']; color: string; picking: boolean; onPick: (point: Vec3, normal: Vec3) => void }) {
+// A click on the model: where it lands on the skin, the skin's outward normal there, the middle of the model along the
+// line of sight (between where the ray enters and where it next leaves), and whether Shift was held.
+export type Pick = { point: Vec3; normal: Vec3; middle: Vec3 | null; shift: boolean }
+
+function ModelMesh({ mesh, look, color, picking, onPick }: { mesh: MeshData; look: Settings['modelLook']; color: string; picking: boolean; onPick: (pick: Pick) => void }) {
   const geometry = useMemo(() => {
     const g = new BufferGeometry()
     g.setAttribute('position', new BufferAttribute(mesh.positions, 3))
@@ -177,7 +181,12 @@ function ModelMesh({ mesh, look, color, picking, onPick }: { mesh: MeshData; loo
       if (!picking || !d || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5 || performance.now() - d.t > 600 || !e.face) return
       e.stopPropagation()
       const n = e.face.normal
-      onPick([e.point.x, e.point.y, e.point.z], [n.x, n.y, n.z])
+      // Every crossing of the line of sight with the model, both sides, nearest first.
+      const hits = (geometry.boundsTree?.raycast(e.ray, DoubleSide) ?? []).sort((a, b) => a.distance - b.distance)
+      const entry = hits.findIndex(h => h.distance >= e.distance - 1e-6)
+      const out = entry >= 0 ? hits.slice(entry + 1).find(h => h.distance > hits[entry].distance + 1e-4) : undefined
+      const middle: Vec3 | null = out ? [(e.point.x + out.point.x) / 2, (e.point.y + out.point.y) / 2, (e.point.z + out.point.z) / 2] : null
+      onPick({ point: [e.point.x, e.point.y, e.point.z], normal: [n.x, n.y, n.z], middle, shift: e.nativeEvent.shiftKey })
     },
   }
   if (look === 'solid') return <mesh geometry={geometry} {...pick}>
@@ -235,16 +244,41 @@ export type ViewHandle = {
   view: (dir: Vec3) => void
 }
 
-function Handle({ handleRef, box, controlsRef }: { handleRef: MutableRefObject<ViewHandle | null>; box: { lo: Vec3; hi: Vec3 }; controlsRef: MutableRefObject<ComponentRef<typeof OrbitControls> | null> }) {
+// The part of the view the floating panels and bars leave free, on wide screens where they float over it: its middle,
+// as an offset from the canvas's middle, and its size, in CSS pixels.
+function freeSpace(canvas: HTMLCanvasElement, width: number, height: number): { dx: number; dy: number; width: number; height: number } {
+  const box = canvas.getBoundingClientRect()
+  const whole = { dx: 0, dy: 0, width, height }
+  const side = document.querySelector('.sidebar')?.getBoundingClientRect()
+  const inspector = document.querySelector('.inspector')?.getBoundingClientRect()
+  const bars = document.querySelector('.viewport-bar-row')?.getBoundingClientRect()
+  const dock = document.querySelector('.timeline')?.getBoundingClientRect()
+  if (!side || !inspector || !bars || !dock || box.width < 900 || side.right >= inspector.left) return whole
+  const left = Math.max(0, side.right - box.left), right = Math.min(width, inspector.left - box.left)
+  const top = Math.max(0, bars.bottom - box.top), bottom = Math.min(height, dock.top - box.top)
+  if (right - left < 200 || bottom - top < 200) return whole
+  return { dx: (left + right) / 2 - width / 2, dy: (top + bottom) / 2 - height / 2, width: right - left, height: bottom - top }
+}
+
+function Handle({ handleRef, box, controlsRef, fitKey }: { handleRef: MutableRefObject<ViewHandle | null>; box: { lo: Vec3; hi: Vec3 }; controlsRef: MutableRefObject<ComponentRef<typeof OrbitControls> | null>; fitKey: string }) {
   const { gl, scene, camera, size } = useThree()
+  // The model's middle sits in the middle of the free space, not behind a panel.
+  useEffect(() => {
+    const cam = camera as PerspectiveCamera
+    const { dx, dy } = freeSpace(gl.domElement, size.width, size.height)
+    if (dx || dy) cam.setViewOffset(size.width, size.height, -dx, -dy, size.width, size.height)
+    else cam.clearViewOffset()
+  }, [camera, gl, size])
   useEffect(() => {
     const c = new Vector3((box.lo[0] + box.hi[0]) / 2, (box.lo[1] + box.hi[1]) / 2, (box.lo[2] + box.hi[2]) / 2)
     const radius = Math.hypot(box.hi[0] - box.lo[0], box.hi[1] - box.lo[1], box.hi[2] - box.lo[2]) / 2 || 50
     const place = (dir: Vec3) => {
       const cam = camera as PerspectiveCamera
-      const fov = (cam.fov * Math.PI) / 180
-      const aspect = size.width / Math.max(1, size.height)
-      const fit = Math.max(radius / Math.sin(fov / 2), radius / Math.sin(Math.atan(Math.tan(fov / 2) * aspect))) * 0.82
+      const free = freeSpace(gl.domElement, size.width, size.height)
+      // The half-angles the free space spans, up and across; the model's bounding ball fits the narrower.
+      const t = Math.tan((cam.fov * Math.PI) / 360) / Math.max(1, size.height)
+      const half = Math.min(Math.atan(t * free.height), Math.atan(t * free.width))
+      const fit = (radius / Math.sin(half)) * 0.92
       const d = new Vector3(...dir).normalize()
       cam.position.copy(c).addScaledVector(d, fit)
       cam.near = Math.max(0.01, fit / 200); cam.far = fit * 20
@@ -254,12 +288,17 @@ function Handle({ handleRef, box, controlsRef }: { handleRef: MutableRefObject<V
       controlsRef.current?.target.copy(c)
       controlsRef.current?.update()
     }
+    if (import.meta.env.DEV) (window as unknown as { vs3dCamera: unknown }).vs3dCamera = { camera, size, freeSpace: () => freeSpace(gl.domElement, size.width, size.height) }
     handleRef.current = {
       fit: () => place([0.9, -1.5, 0.75]),
       view: place,
       capture: (scale, transparent) => new Promise(resolve => {
+        const cam = camera as PerspectiveCamera
         const ratio = gl.getPixelRatio()
         const clear = gl.getClearAlpha()
+        const offset = cam.view ? { ...cam.view } : null
+        // The picture is the whole view, centred on the model, without the shift for the panels.
+        cam.clearViewOffset()
         gl.setPixelRatio(ratio * scale)
         gl.setSize(size.width, size.height, false)
         if (!transparent) gl.setClearColor(0xffffff, 1)
@@ -269,24 +308,30 @@ function Handle({ handleRef, box, controlsRef }: { handleRef: MutableRefObject<V
           gl.setPixelRatio(ratio)
           gl.setSize(size.width, size.height, false)
           gl.setClearColor(0x000000, clear)
+          if (offset?.enabled) cam.setViewOffset(offset.fullWidth, offset.fullHeight, offset.offsetX, offset.offsetY, offset.width, offset.height)
           resolve(blob)
         }, 'image/png')
       }),
     }
     return () => { handleRef.current = null }
   }, [gl, scene, camera, size, box, handleRef, controlsRef])
+  // A new model is framed whole. This runs inside the canvas, once its camera and controls exist.
+  const framed = useRef('')
+  useEffect(() => {
+    if (framed.current === fitKey || !handleRef.current) return
+    framed.current = fitKey
+    handleRef.current.fit()
+  })
   return null
 }
 
 export function Viewport({ mesh, settings, view, net, attractors, picking, onPick, handleRef, fitKey }: {
   mesh: MeshData; settings: Settings; view: VeinView; net: Net; attractors: Attractors | null
-  picking: boolean; onPick: (point: Vec3, normal: Vec3) => void; handleRef: MutableRefObject<ViewHandle | null>; fitKey: string
+  picking: boolean; onPick: (pick: Pick) => void; handleRef: MutableRefObject<ViewHandle | null>; fitKey: string
 }) {
   const controlsRef = useRef<ComponentRef<typeof OrbitControls>>(null)
   const box = useMemo(() => meshBounds(mesh.positions), [mesh])
   const colors = useMemo(() => [settings.colorA, settings.colorB, settings.colorC, settings.linkColor], [settings.colorA, settings.colorB, settings.colorC, settings.linkColor])
-  // A new model, or a new window, frames the model again.
-  useEffect(() => { const t = setTimeout(() => handleRef.current?.fit(), 0); return () => clearTimeout(t) }, [fitKey, handleRef])
   const size = Math.max(box.hi[0] - box.lo[0], box.hi[1] - box.lo[1], box.hi[2] - box.lo[2])
   return <div className="stage-canvas" style={{ cursor: picking ? 'crosshair' : 'grab' }}>
     <Canvas camera={{ position: [90, -150, 75], up: [0, 0, 1], fov: 35, near: 0.5, far: 5000 }} gl={RENDERER} dpr={[1, 2]} role="img"
@@ -297,7 +342,7 @@ export function Viewport({ mesh, settings, view, net, attractors, picking, onPic
       {settings.showRoots && <RootMarkers net={net} colors={colors} radius={Math.max(settings.maxWidth * 0.45, size * 0.008)} />}
       {settings.showModel && <ModelMesh mesh={mesh} look={settings.modelLook} color={settings.modelColor} picking={picking} onPick={onPick} />}
       {!settings.showModel && picking && <ModelMesh mesh={mesh} look="glass" color={settings.modelColor} picking={picking} onPick={onPick} />}
-      <Handle handleRef={handleRef} box={box} controlsRef={controlsRef} />
+      <Handle handleRef={handleRef} box={box} controlsRef={controlsRef} fitKey={fitKey} />
       <OrbitControls ref={controlsRef} makeDefault enableDamping={false}
         touches={{ ONE: TOUCH.ROTATE, TWO: TOUCH.DOLLY_PAN }} mouseButtons={{ LEFT: MOUSE.ROTATE, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.PAN }} />
     </Canvas>
