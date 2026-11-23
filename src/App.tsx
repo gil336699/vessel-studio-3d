@@ -136,9 +136,13 @@ export function App() {
     const next = applyPreset(s, name, longestSide(mesh))
     const patch: Partial<Settings> = { ...next, model: doc ? p.model! : s.model }
     void model.change(patch, null, { model: doc ?? design.model }).then(() => {
-      // A preset's roots go on its own spots, one for each system.
-      const rule = p.roots ?? defaultRootRule(keepOwn ? 'imported' : (p.model ?? s.model), patch.mode ?? s.mode)
-      void model.setRoots(rootRequests(mesh, rule, patch.mode ?? s.mode, patch.systems ?? s.systems))
+      // A preset's roots go on its own spots, one for each system. On a model you opened, its spots mean nothing, so
+      // the roots go where the model suits best, except along a rim (or round the top), which any model has.
+      const mode = patch.mode ?? s.mode, systems = patch.systems ?? s.systems
+      const rule = p.roots ?? defaultRootRule(keepOwn ? 'imported' : (p.model ?? s.model), mode)
+      void model.setRoots(keepOwn && rule !== 'rim'
+        ? Array.from({ length: systems }, (_, t) => ({ kind: 'auto' as const, system: t, systems }))
+        : rootRequests(mesh, rule, mode, systems))
     })
     setStatus({ text: `${p.label}: ${p.tip} Press Grow.` })
   }

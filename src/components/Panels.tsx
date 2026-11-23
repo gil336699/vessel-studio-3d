@@ -68,7 +68,7 @@ export function ModelPanel({ s, change, modelName, triangles, open, info, size, 
       ]} />}
       <div className="button-row">
         <Button unavailable={busy} tip="Put roots back on the model’s own spots, one for each system." onClick={onDefaultRoots}>Model’s spots</Button>
-        <Button unavailable={busy || (!open && 'This model has no open rim.') || (inside && 'Roots along the rim are for growing On the surface.')} tip="Six roots spread along the model’s open rim, as for roots round a pot." onClick={onRimRoots}>Along the rim</Button>
+        <Button unavailable={busy || (inside && 'Roots along the rim are for growing On the surface.')} tip={open ? 'Six roots spread along the model’s open rim, as for roots round a pot.' : 'Six roots round the model’s top lip, as for roots round a pot.'} onClick={onRimRoots}>{open ? 'Along the rim' : 'Round the top'}</Button>
       </div>
       <Button className="wide" unavailable={busy || (!roots && 'There are no roots to clear.')} tip="Remove every root, to place your own." onClick={onClearRoots}>Clear roots</Button>
     </Section>

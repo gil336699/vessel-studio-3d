@@ -221,8 +221,10 @@ export function createRunner(post: (message: FromRunner, transfer: Transferable[
         } else refused = 'Roots along the rim are for growing On the surface.'
       } else if (d instanceof SurfaceDomain) {
         if (r.kind === 'rim') {
-          if (!d.open) { refused = 'This model has no open rim, so roots can’t go along one. Click the model to place roots.'; continue }
-          d.rimRoots(r.count, Math.max(clear, 0.5 * params.segment)).forEach((root, i) => added.push({ ...root, system: i % systems }))
+          // A closed model has no rim: the roots go round its top lip instead.
+          const roots = d.open ? d.rimRoots(r.count, Math.max(clear, 0.5 * params.segment)) : d.topRoots(r.count, clear)
+          if (!roots.length) { refused = 'No spot along this model’s rim or top is clear for a root. Click the model to place roots.'; continue }
+          roots.forEach((root, i) => added.push({ ...root, system: i % systems }))
         } else if (r.kind === 'auto') {
           const root = d.autoRoot(r.system, r.systems, clear)
           if (root) added.push({ ...root, system: r.system })

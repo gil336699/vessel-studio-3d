@@ -311,6 +311,28 @@ export class SurfaceDomain implements Domain {
     return dist
   }
 
+  // A closed model has no rim: roots round its top lip instead, `count` of them at even angles about the model's
+  // upright axis, each on the outermost point near the top at its angle, so roots can grow down and round a pot.
+  topRoots(count: number, clearance: number): { at: Vec3; normal: Vec3 }[] {
+    const P = this.positions
+    const { lo, hi } = meshBounds(P)
+    const cx = (lo[0] + hi[0]) / 2, cy = (lo[1] + hi[1]) / 2, top = hi[2] - 0.04 * (hi[2] - lo[2])
+    const best = new Array<number>(count).fill(-1), reach = new Array<number>(count).fill(-Infinity)
+    for (let i = 0; i < P.length; i += 3) {
+      if (P[i + 2] < top) continue
+      const a = Math.atan2(P[i + 1] - cy, P[i] - cx), r = Math.hypot(P[i] - cx, P[i + 1] - cy)
+      const k = Math.floor((((a / (2 * Math.PI)) + 1) % 1) * count) % count
+      if (r > reach[k]) { reach[k] = r; best[k] = i }
+    }
+    const out: { at: Vec3; normal: Vec3 }[] = []
+    for (const i of best) {
+      if (i < 0) continue
+      const root = this.root([P[i], P[i + 1], P[i + 2]], clearance)
+      if (root) out.push(root)
+    }
+    return out
+  }
+
   // Roots spread evenly along the longest open rim, `count` of them, each moved onto the surface `inset` from the rim.
   rimRoots(count: number, inset: number): { at: Vec3; normal: Vec3 }[] {
     const loop = this.rims[0]
