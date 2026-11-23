@@ -1,16 +1,20 @@
-// Points in a uniform 3D grid, for the crowding test, loop neighbourhoods and blue-noise placement. Cells are packed
-// into one number, exact below 2^53: 2^16 cells along each axis, far more than any model here needs.
+// Points in a uniform 3D grid, for the crowding test and loop neighbourhoods. Cells are packed into one number, exact
+// below 2^53: 2^16 cells along each axis, counted from the model's middle (origin), so a model far from the file's
+// zero point is covered as well as one at it.
 const R = 65536, H = 32768
 
 export class PointGrid {
   private map = new Map<number, number[]>()
-  constructor(readonly cell: number) {}
+  private ox: number
+  private oy: number
+  private oz: number
+  constructor(readonly cell: number, origin: readonly [number, number, number] = [0, 0, 0]) { [this.ox, this.oy, this.oz] = origin }
 
   private key(i: number, j: number, k: number) { return ((i + H) * R + (j + H)) * R + (k + H) }
 
   add(id: number, x: number, y: number, z: number) {
     const c = this.cell
-    const k = this.key(Math.floor(x / c), Math.floor(y / c), Math.floor(z / c))
+    const k = this.key(Math.floor((x - this.ox) / c), Math.floor((y - this.oy) / c), Math.floor((z - this.oz) / c))
     const list = this.map.get(k)
     if (list) list.push(id); else this.map.set(k, [id])
   }
@@ -19,9 +23,10 @@ export class PointGrid {
   // cells than hold points, as for a wide loop search, the cells that hold points are looked at instead.
   near(x: number, y: number, z: number, r: number, xs: ArrayLike<number>, ys: ArrayLike<number>, zs: ArrayLike<number>, visit: (id: number, d2: number) => boolean | void) {
     const r2 = r * r, c = this.cell
-    const i0 = Math.floor((x - r) / c), i1 = Math.floor((x + r) / c)
-    const j0 = Math.floor((y - r) / c), j1 = Math.floor((y + r) / c)
-    const k0 = Math.floor((z - r) / c), k1 = Math.floor((z + r) / c)
+    const lx = x - this.ox, ly = y - this.oy, lz = z - this.oz
+    const i0 = Math.floor((lx - r) / c), i1 = Math.floor((lx + r) / c)
+    const j0 = Math.floor((ly - r) / c), j1 = Math.floor((ly + r) / c)
+    const k0 = Math.floor((lz - r) / c), k1 = Math.floor((lz + r) / c)
     const test = (list: number[]) => {
       for (const id of list) {
         const dx = xs[id] - x, dy = ys[id] - y, dz = zs[id] - z, d2 = dx * dx + dy * dy + dz * dz

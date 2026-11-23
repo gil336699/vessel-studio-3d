@@ -28,3 +28,11 @@ describe('veinView', () => {
     expect(v.segs[o + 7]).toBeCloseTo(0.25, 9)
   })
 })
+
+describe('veinView before the trees meet', () => {
+  it('shows every vein in Join while no tree has met the other yet', () => {
+    const net = { x: [0, 1, 2], y: [0, 0, 0], z: [0, 0, 0], parent: [-1, 0, 1], sys: [0, 0, 0], joins: [], links: [], points: 3 }
+    const v = veinView(net, { ...DEFAULTS, systems: 2, coupling: 'join' as const, trim: true })
+    expect(v.count).toBe(2)
+  })
+})

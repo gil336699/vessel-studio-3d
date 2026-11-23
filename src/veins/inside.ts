@@ -117,21 +117,48 @@ export class InsideDomain implements Domain {
   }
 
   // A root for a click on the model's skin at `point`, whose outward face normal is `normal`: the vessel enters there
-  // and starts growing a little inside, deeper than the clearance. Null when the model is too thin there.
+  // and starts growing a little inside, deeper than the clearance. Null when the model is too thin there. Inward is
+  // found from the distance grid, not the normal alone, so a model whose triangles face inward works too.
   rootFromSkin(point: Vec3, normal: Vec3, clearance: number, segment: number): { at: Vec3; entry: Vec3 } | null {
     const depth = Math.max(0, clearance) + 0.5 * segment
-    const step = Math.max(0.25 * this.sdf.v, 0.05 * segment)
+    const v = this.sdf.v
+    const step = Math.max(0.25 * v, 0.05 * segment)
+    // Which way along the normal goes in: the side where the distance is lower.
+    const probe = Math.max(v, step)
+    const ahead = this.at(point[0] + normal[0] * probe, point[1] + normal[1] * probe, point[2] + normal[2] * probe)
+    const behind = this.at(point[0] - normal[0] * probe, point[1] - normal[1] * probe, point[2] - normal[2] * probe)
+    const sign = ahead < behind ? 1 : -1
     let [x, y, z] = point
-    // Inward along the face normal first, then down the distance grid, until deep enough.
+    // Inward along the normal first, then down the distance grid, until deep enough.
     for (let t = 0, i = 0; i < 4000; i++) {
       const d = -this.at(x, y, z)
       if (d >= depth) return { at: [x, y, z], entry: [...point] }
-      const g = d > 0.5 * this.sdf.v ? this.gradient(x, y, z) : normal
-      x -= g[0] * step; y -= g[1] * step; z -= g[2] * step
+      if (d > 0.5 * v) { const g = this.gradient(x, y, z); x -= g[0] * step; y -= g[1] * step; z -= g[2] * step }
+      else { x += sign * normal[0] * step; y += sign * normal[1] * step; z += sign * normal[2] * step }
       t += step
-      if (t > 4 * depth + 4 * this.sdf.v) break
+      if (t > 4 * depth + 4 * v) break
     }
     return null
+  }
+
+  // The deepest point inside, for a root when nowhere better is known, such as on a model you opened. With several
+  // systems, system t's root is the deepest point in its own slice across the model's longest side, so they start
+  // apart. Null when no point is deeper than the clearance.
+  deepest(system: number, systems: number, clearance: number): Vec3 | null {
+    const { nx, ny, nz, origin, v, F } = this.sdf
+    const span = [this.hi[0] - this.lo[0], this.hi[1] - this.lo[1], this.hi[2] - this.lo[2]]
+    const axis = span[0] >= span[1] && span[0] >= span[2] ? 0 : span[1] >= span[2] ? 1 : 2
+    const n = Math.max(1, systems), t = Math.max(0, Math.min(n - 1, system))
+    const from = this.lo[axis] + (span[axis] * t) / n, to = this.lo[axis] + (span[axis] * (t + 1)) / n
+    let best = Math.max(0, clearance), at: Vec3 | null = null
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const d = -F[i + nx * (j + ny * k)]
+      if (!(d > best)) continue
+      const p: Vec3 = [origin[0] + i * v, origin[1] + j * v, origin[2] + k * v]
+      if (p[axis] < from || p[axis] > to) continue
+      best = d; at = p
+    }
+    return at
   }
 
   // A root placed inside the model, as is.
@@ -143,6 +170,7 @@ export type InsidePlacement = 'even' | 'random' | 'wall' | 'shell'
 export type InsideScatter = { count: number; placement: InsidePlacement; seed: number; clearance: number; shell: number }
 
 const CANDIDATES = 12
+const MAX_CELLS = 16_000_000
 
 // Where the attractors go inside. The count is exact. Even uses Mitchell's best candidate (blue noise, with an exact
 // count), Random is uniform, Wall crowds them near the wall (as Runions 2007, Fig. 7, did near a crown's edge), and
@@ -164,12 +192,18 @@ export function scatterInside(dom: InsideDomain, o: InsideScatter): { p: Float64
   const { F, v } = dom.sdf
   let cells = 0
   for (let q = 0; q < F.length; q++) if (fits(-F[q])) cells++
-  const volume = Math.max(v ** 3, cells * v ** 3)
+  // Nowhere deeper than the clearance: no room at all.
+  if (!cells) return { p: new Float64Array(0), short: true }
+  const volume = cells * v ** 3
   const spacing = Math.cbrt(volume / n)
   const reach = 1.5 * spacing
-  // A dense grid of cells `reach` wide, with linked lists of the points placed so far.
-  const cell = reach
+  // A dense grid of cells at least `reach` wide, with linked lists of the points placed so far. The cells are never
+  // finer than a 160th of the model, so a thin model or a large clearance, which make the spacing tiny, can't ask for
+  // billions of cells.
+  const cell = Math.max(reach, Math.max(w, h, d) / 160)
   const gx = Math.max(1, Math.ceil(w / cell) + 1), gy = Math.max(1, Math.ceil(h / cell) + 1), gz = Math.max(1, Math.ceil(d / cell) + 1)
+  // A guard: the cells above are never more than about 4 million; this many would take too much of a tab's memory.
+  if (gx * gy * gz > MAX_CELLS) throw new Error(`Placing attractors would need ${(gx * gy * gz / 1e6).toFixed(0)} million cells.`)
   const headOf = new Int32Array(gx * gy * gz).fill(-1)
   const next = new Int32Array(n)
   const P = new Float64Array(n * 3)

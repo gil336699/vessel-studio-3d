@@ -190,7 +190,7 @@ export class Engine {
     this.owner = new Int32Array(k * this.T).fill(-1)
     this.sightOf = new Int32Array(k * this.T).fill(-1)
     this.sight = new Uint8Array(k * this.T)
-    this.grid = new PointGrid(Math.max(1e-6, 2.5 * params.segment))
+    this.grid = new PointGrid(Math.max(1e-6, 2.5 * params.segment), domain.centre)
     if ('roots' in from) {
       this.rng = new Rng(params.seed)
       for (const root of from.roots) this.placeRoot(root)
@@ -249,15 +249,16 @@ export class Engine {
   setParams(params: GrowthParams) {
     if (params.segment !== this.params.segment) {
       // The grid's cells follow the segment length; rebuild it for the new one.
-      this.grid = new PointGrid(Math.max(1e-6, 2.5 * params.segment))
+      this.grid = new PointGrid(Math.max(1e-6, 2.5 * params.segment), this.domain.centre)
       for (let i = 0; i < this.xs.length; i++) if (!this.fixedFlag.data[i]) this.grid.add(i, this.xs.data[i], this.ys.data[i], this.zs.data[i])
     }
     // Sight lines inside depend on the clearance: work them out again.
     if (params.clearance !== this.params.clearance) this.sightOf.fill(-1)
     // The number of systems and how they couple are fixed for an engine; they change by starting again.
     this.params = { ...params, systems: this.params.systems, coupling: this.params.coupling }
-    // New settings may let growth carry on, unless every attractor is already reached.
-    if (this.done && this.done !== 'empty' && this.done !== 'reached') this.done = null
+    // New settings may let growth carry on, unless every attractor is already reached; the wait for progress starts
+    // again, or growth that stopped for lack of it would stop again at once.
+    if (this.done && this.done !== 'empty' && this.done !== 'reached') { this.done = null; this.idle = 0 }
   }
 
   // A root added while growing starts a new vein of its own.
@@ -265,7 +266,7 @@ export class Engine {
     const from = this.xs.length
     this.placeRoot(root)
     this.refreshNearest(from)
-    if (this.done) this.done = null
+    if (this.done) { this.done = null; this.idle = 0 }
   }
 
   snapshot(): EngineState {

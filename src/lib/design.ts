@@ -77,8 +77,13 @@ export function rootRequests(mesh: MeshData, rule: RootRule, mode: Mode, systems
   return spots.map((target, t) => ({ kind: 'skin', ...skinPoint(mesh, target, normals), system: t }))
 }
 
-export const defaultRequests = (d: Pick<Design, 'model' | 'settings'>) =>
-  rootRequests(d.model.mesh, defaultRootRule(d.model.source.kind === 'built-in' ? d.model.source.id : 'imported', d.settings.mode), d.settings.mode, d.settings.systems)
+// A model's first roots: a built-in model's own spots, or for a model you opened, wherever the worker finds it suits
+// best, as the skin of an unknown model may be thin or near a rim anywhere.
+export function defaultRequests(d: Pick<Design, 'model' | 'settings'>): RootRequest[] {
+  const n = Math.max(1, d.settings.systems)
+  if (d.model.source.kind !== 'built-in') return Array.from({ length: n }, (_, t) => ({ kind: 'auto', system: t, systems: n }))
+  return rootRequests(d.model.mesh, defaultRootRule(d.model.source.id, d.settings.mode), d.settings.mode, n)
+}
 
 export const roundTo = (v: number, digits = 2) => Number(v.toFixed(digits))
 

@@ -21,7 +21,8 @@ export type VeinView = {
 
 export function veinView(net: VeinNet, s: Settings, opts: { separate?: boolean } = {}): VeinView {
   const n = net.points
-  const keep = joining(s) && s.trim ? trimDeadEnds(net.parent, n, net.links) : null
+  // Trimming needs joins to keep: before the trees meet, every end is a dead end, and trimming would leave nothing.
+  const keep = joining(s) && s.trim && net.links.length > 0 ? trimDeadEnds(net.parent, n, net.links) : null
   let widths = veinWidths(net.parent, n, widthSettings(s), keep)
   let narrowed = 0, closest = Infinity
   if (interweaving(s) && opts.separate !== false) {

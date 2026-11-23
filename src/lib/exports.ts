@@ -22,34 +22,39 @@ export const stlFile = (parts: MeshData[], name: string) => {
 // 3MF: millimetres, one object per part with its own colour, all in one build. together: the parts are components of
 // one object, which slicers treat as a single object and join where its parts overlap.
 export async function threeMf(parts: (MeshData & { name: string; color: string })[], title: string, together = false): Promise<Blob> {
-  const xml: string[] = []
-  xml.push('<?xml version="1.0" encoding="UTF-8"?>')
-  xml.push('<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">')
-  xml.push(`<metadata name="Title">${title.replace(/[<&>"]/g, '')}</metadata><metadata name="Application">Vessel Studio 3D</metadata>`)
-  xml.push('<resources><basematerials id="1">')
-  for (const p of parts) xml.push(`<base name="${p.name.replace(/[<&>"]/g, '')}" displaycolor="${p.color.toUpperCase()}FF"/>`)
-  xml.push('</basematerials>')
+  // The model's XML, in pieces of a few thousand rows, so millions of triangles never make one huge string.
+  const enc = new TextEncoder()
+  const pieces: Uint8Array[] = []
+  let rows: string[] = []
+  const flush = () => { if (rows.length) { pieces.push(enc.encode(rows.join(''))); rows = [] } }
+  const put = (text: string) => { rows.push(text); if (rows.length >= 4000) flush() }
+  const name = (text: string) => text.replace(/[<&>"]/g, '')
+  put('<?xml version="1.0" encoding="UTF-8"?>')
+  put('<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">')
+  put(`<metadata name="Title">${name(title)}</metadata><metadata name="Application">Vessel Studio 3D</metadata>`)
+  put('<resources><basematerials id="1">')
+  for (const p of parts) put(`<base name="${name(p.name)}" displaycolor="${p.color.toUpperCase()}FF"/>`)
+  put('</basematerials>')
   parts.forEach((p, k) => {
-    xml.push(`<object id="${k + 2}" type="model" name="${p.name.replace(/[<&>"]/g, '')}" pid="1" pindex="${k}"><mesh><vertices>`)
+    put(`<object id="${k + 2}" type="model" name="${name(p.name)}" pid="1" pindex="${k}"><mesh><vertices>`)
     const P = p.positions
-    const rows: string[] = []
-    for (let i = 0; i < P.length; i += 3) rows.push(`<vertex x="${P[i].toFixed(4)}" y="${P[i + 1].toFixed(4)}" z="${P[i + 2].toFixed(4)}"/>`)
-    xml.push(rows.join(''), '</vertices><triangles>')
-    const I = p.indices, tris: string[] = []
-    for (let i = 0; i < I.length; i += 3) tris.push(`<triangle v1="${I[i]}" v2="${I[i + 1]}" v3="${I[i + 2]}"/>`)
-    xml.push(tris.join(''), '</triangles></mesh></object>')
+    for (let i = 0; i < P.length; i += 3) put(`<vertex x="${P[i].toFixed(4)}" y="${P[i + 1].toFixed(4)}" z="${P[i + 2].toFixed(4)}"/>`)
+    put('</vertices><triangles>')
+    const I = p.indices
+    for (let i = 0; i < I.length; i += 3) put(`<triangle v1="${I[i]}" v2="${I[i + 1]}" v3="${I[i + 2]}"/>`)
+    put('</triangles></mesh></object>')
   })
   const whole = parts.length + 2
-  if (together) xml.push(`<object id="${whole}" type="model" name="${title.replace(/[<&>"]/g, '')}"><components>${parts.map((_, k) => `<component objectid="${k + 2}"/>`).join('')}</components></object>`)
-  xml.push('</resources><build>')
-  if (together) xml.push(`<item objectid="${whole}"/>`)
-  else parts.forEach((_, k) => xml.push(`<item objectid="${k + 2}"/>`))
-  xml.push('</build></model>')
-  const enc = new TextEncoder()
+  if (together) put(`<object id="${whole}" type="model" name="${name(title)}"><components>${parts.map((_, k) => `<component objectid="${k + 2}"/>`).join('')}</components></object>`)
+  put('</resources><build>')
+  if (together) put(`<item objectid="${whole}"/>`)
+  else parts.forEach((_, k) => put(`<item objectid="${k + 2}"/>`))
+  put('</build></model>')
+  flush()
   return zip([
     { name: '[Content_Types].xml', data: enc.encode('<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/></Types>') },
     { name: '_rels/.rels', data: enc.encode('<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Target="/3D/3dmodel.model" Id="rel0" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/></Relationships>') },
-    { name: '3D/3dmodel.model', data: enc.encode(xml.join('')) },
+    { name: '3D/3dmodel.model', data: pieces },
   ])
 }
 

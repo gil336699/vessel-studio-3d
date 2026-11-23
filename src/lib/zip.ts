@@ -7,34 +7,45 @@ export function crc32(data: Uint8Array): number {
   return (c ^ -1) >>> 0
 }
 
-async function deflate(data: Uint8Array): Promise<Uint8Array | null> {
+// Running CRC-32 over several pieces.
+function crcOf(pieces: Uint8Array[]): number {
+  if (!table) crc32(new Uint8Array(0))
+  let c = -1
+  for (const data of pieces) for (let i = 0; i < data.length; i++) c = table![(c ^ data[i]) & 0xff] ^ (c >>> 8)
+  return (c ^ -1) >>> 0
+}
+
+async function deflate(pieces: Uint8Array[]): Promise<Uint8Array | null> {
   if (typeof CompressionStream === 'undefined') return null
   try {
-    const stream = new Blob([data as BlobPart]).stream().pipeThrough(new CompressionStream('deflate-raw'))
+    const stream = new Blob(pieces as BlobPart[]).stream().pipeThrough(new CompressionStream('deflate-raw'))
     return new Uint8Array(await new Response(stream).arrayBuffer())
   } catch { return null }
 }
 
-export async function zip(files: { name: string; data: Uint8Array }[]): Promise<Blob> {
+// files: each entry's bytes, whole or in pieces (a 3MF model of millions of triangles is too long for one string).
+export async function zip(files: { name: string; data: Uint8Array | Uint8Array[] }[]): Promise<Blob> {
   const parts: BlobPart[] = [], central: Uint8Array[] = []
   let offset = 0
   for (const f of files) {
     const name = new TextEncoder().encode(f.name)
-    const packed = await deflate(f.data)
-    const method = packed && packed.length < f.data.length ? 8 : 0
-    const body = method === 8 ? packed! : f.data
-    const crc = crc32(f.data)
+    const pieces = Array.isArray(f.data) ? f.data : [f.data]
+    const size = pieces.reduce((n, p) => n + p.length, 0)
+    const packed = await deflate(pieces)
+    const method = packed && packed.length < size ? 8 : 0
+    const crc = crcOf(pieces)
+    const bodyLength = method === 8 ? packed!.length : size
     const head = new DataView(new ArrayBuffer(30))
     head.setUint32(0, 0x04034b50, true); head.setUint16(4, 20, true); head.setUint16(6, 0, true); head.setUint16(8, method, true)
-    head.setUint32(14, crc, true); head.setUint32(18, body.length, true); head.setUint32(22, f.data.length, true); head.setUint16(26, name.length, true)
-    parts.push(head.buffer, name as BlobPart, body as BlobPart)
+    head.setUint32(14, crc, true); head.setUint32(18, bodyLength, true); head.setUint32(22, size, true); head.setUint16(26, name.length, true)
+    parts.push(head.buffer, name as BlobPart, ...(method === 8 ? [packed!] : pieces) as BlobPart[])
     const c = new DataView(new ArrayBuffer(46))
     c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(10, method, true)
-    c.setUint32(16, crc, true); c.setUint32(20, body.length, true); c.setUint32(24, f.data.length, true); c.setUint16(28, name.length, true)
+    c.setUint32(16, crc, true); c.setUint32(20, bodyLength, true); c.setUint32(24, size, true); c.setUint16(28, name.length, true)
     c.setUint32(42, offset, true)
     const entry = new Uint8Array(46 + name.length); entry.set(new Uint8Array(c.buffer)); entry.set(name, 46)
     central.push(entry)
-    offset += 30 + name.length + body.length
+    offset += 30 + name.length + bodyLength
   }
   const size = central.reduce((n, e) => n + e.length, 0)
   const end = new DataView(new ArrayBuffer(22))

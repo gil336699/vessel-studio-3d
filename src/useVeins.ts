@@ -120,6 +120,8 @@ export function useVeins(initial: () => { design: Design; saved: boolean }, setS
   const [info, setInfo] = useState<DomainInfo | null>(null)
   // Ready once the worker has built the model's domain and placed the attractors.
   const [ready, setReady] = useState(false)
+  // Starting again, the worker places the roots just after it is ready: until it says where, they are pending.
+  const [placingRoots, setPlacingRoots] = useState(false)
   const [running, setRunning] = useState(false)
   const [stopping, setStopping] = useState(false)
   const runningRef = useRef(false)
@@ -157,6 +159,7 @@ export function useVeins(initial: () => { design: Design; saved: boolean }, setS
   const load = useCallback((d: Design) => {
     readyRef.current = false
     setReady(false)
+    setPlacingRoots(!d.growth && d.roots.length > 0)
     pending.current = []
     const g = ++gen.current
     client.current?.load({
@@ -219,6 +222,7 @@ export function useVeins(initial: () => { design: Design; saved: boolean }, setS
         }
         case 'roots': {
           if (message.gen !== gen.current) return
+          if (!message.live) setPlacingRoots(false)
           if (message.live) {
             const request = pending.current.shift()
             if (request && message.added.length) {
@@ -396,7 +400,7 @@ export function useVeins(initial: () => { design: Design; saved: boolean }, setS
   const markSaved = useCallback(() => setUnsaved(false), [])
 
   return {
-    design, stats, net, mirror, attractors, info, ready, running, stopping, unsaved, canUndo, canRedo,
+    design, stats, net, mirror, attractors, info, ready, placingRoots, running, stopping, unsaved, canUndo, canRedo,
     current, change, play, step, pause, reset, undo, redo, addRoot, setRoots, replace, markSaved, halt,
   }
 }

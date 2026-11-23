@@ -10,11 +10,13 @@ import { Engine, SHARED, type EngineState, type GrowthParams, type Root, type St
 import { buildSdf, InsideDomain, InsideError, scatterInside, type InsidePlacement } from '../veins/inside'
 import { scatterSurface, SurfaceDomain, type SurfacePlacement } from '../veins/surface'
 
-// A root to place: a click on the skin, a point inside, or roots spread along the open rim.
+// A root to place: a click on the skin, a point inside, roots spread along the open rim, or one wherever the model
+// suits best (auto): its deepest point inside, or on the surface the point farthest from its rims, or its top.
 export type RootRequest =
   | { kind: 'skin'; point: Vec3; normal: Vec3; system: number }
   | { kind: 'inside'; point: Vec3; system: number }
   | { kind: 'rim'; count: number; systems: number }
+  | { kind: 'auto'; system: number; systems: number }
 
 export type DomainInfo = { mode: Mode; volume: number; area: number; rims: number; openings: number; span: number; voxel: number; ms: number }
 
@@ -212,11 +214,19 @@ export function createRunner(post: (message: FromRunner, transfer: Transferable[
         } else if (r.kind === 'inside') {
           if (d.contains(r.point, clear)) added.push({ at: r.point, system: r.system })
           else refused = 'That point isn’t inside the model, clear of its walls.'
+        } else if (r.kind === 'auto') {
+          const at = d.deepest(r.system, r.systems, clear)
+          if (at) added.push({ at, system: r.system })
+          else refused = 'This model has no room inside, clear of its walls, for a root. Try a smaller edge clearance, or grow On the surface.'
         } else refused = 'Roots along the rim are for growing On the surface.'
       } else if (d instanceof SurfaceDomain) {
         if (r.kind === 'rim') {
           if (!d.open) { refused = 'This model has no open rim, so roots can’t go along one. Click the model to place roots.'; continue }
           d.rimRoots(r.count, Math.max(clear, 0.5 * params.segment)).forEach((root, i) => added.push({ ...root, system: i % systems }))
+        } else if (r.kind === 'auto') {
+          const root = d.autoRoot(r.system, r.systems, clear)
+          if (root) added.push({ ...root, system: r.system })
+          else refused = 'No spot on this model is clear of its rims for a root. Try a smaller edge clearance.'
         } else {
           const root = d.root(r.point, clear)
           if (root) added.push({ ...root, system: r.system })

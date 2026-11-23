@@ -199,11 +199,12 @@ function ModelMesh({ mesh, look, color, picking, onPick }: { mesh: MeshData; loo
   </group>
 }
 
-function AttractorPoints({ attractors, used, colors, size }: { attractors: Attractors; used: Uint8Array; colors: string[]; size: number }) {
+// net changes every frame, while its `used` flags are updated in place, so the points are rebuilt from it each frame.
+function AttractorPoints({ attractors, net, colors, size }: { attractors: Attractors; net: Net; colors: string[]; size: number }) {
   const geometry = useMemo(() => new BufferGeometry(), [])
   const palette = useMemo(() => colors.map(c => new Color(c)), [colors])
   useLayoutEffect(() => {
-    const k = attractors.p.length / 3
+    const k = attractors.p.length / 3, used = net.used
     const P: number[] = [], C: number[] = []
     for (let i = 0; i < k; i++) {
       if (used[i]) continue
@@ -215,7 +216,7 @@ function AttractorPoints({ attractors, used, colors, size }: { attractors: Attra
     geometry.setAttribute('position', new BufferAttribute(Float32Array.from(P), 3))
     geometry.setAttribute('color', new BufferAttribute(Float32Array.from(C), 3))
     geometry.computeBoundingSphere()
-  }, [attractors, used, palette, geometry])
+  }, [attractors, net, palette, geometry])
   useEffect(() => () => geometry.dispose(), [geometry])
   return <points geometry={geometry}><pointsMaterial vertexColors size={size} sizeAttenuation={false} transparent opacity={0.75} depthWrite={false} /></points>
 }
@@ -338,7 +339,7 @@ export function Viewport({ mesh, settings, view, net, attractors, picking, onPic
       aria-label="3D view of the model and its veins. Drag to orbit, scroll to zoom, right-drag to pan.">
       <ambientLight intensity={0.85} /><CameraLamp />
       {settings.showVeins && view.count > 0 && <VeinMesh view={view} colors={colors} />}
-      {settings.showAttractors && attractors && <AttractorPoints attractors={attractors} used={net.used} colors={colors} size={3} />}
+      {settings.showAttractors && attractors && <AttractorPoints attractors={attractors} net={net} colors={colors} size={3} />}
       {settings.showRoots && <RootMarkers net={net} colors={colors} radius={Math.max(settings.maxWidth * 0.45, size * 0.008)} />}
       {settings.showModel && <ModelMesh mesh={mesh} look={settings.modelLook} color={settings.modelColor} picking={picking} onPick={onPick} />}
       {!settings.showModel && picking && <ModelMesh mesh={mesh} look="glass" color={settings.modelColor} picking={picking} onPick={onPick} />}

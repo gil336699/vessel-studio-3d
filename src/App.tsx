@@ -39,7 +39,12 @@ function firstDesign(): { design: Design; saved: boolean } {
 
 const DONE_TEXT: Record<string, (left: number, total: number) => string> = {
   reached: () => 'Done: every attractor is reached.',
-  stalled: (left, total) => `Stopped: ${count(left)} of ${count(total)} attractors can’t be reached from here. A longer segment, a shorter kill distance or another root may help.`,
+  // A few left over is normal: no vein has a clear path to them. Most left over means the veins had no room.
+  stalled: (left, total) => left <= Math.max(3, 0.02 * total)
+    ? `Done: all but ${count(left)} of ${count(total)} attractors are reached; no vein has a clear path to the rest.`
+    : left > 0.5 * total
+      ? `Stopped early: ${count(left)} of ${count(total)} attractors can’t be reached. The model may be too thin, or the roots boxed in: try a smaller edge clearance or segment, another root, or the other mode.`
+      : `Stopped: ${count(left)} of ${count(total)} attractors can’t be reached from here. A longer segment, a shorter kill distance or another root may help.`,
   'out-of-reach': (left, total) => `Stopped: ${count(left)} of ${count(total)} attractors are beyond the attraction distance. Raise it, or set it to 0 for no limit.`,
   cap: () => 'Stopped at the limit of 400,000 vein points. Use fewer attractors or a longer segment.',
   empty: () => 'No roots yet: click the model with the Roots tool (O) to add one.',
@@ -84,11 +89,16 @@ export function App() {
   useEffect(() => { if (import.meta.env.DEV) (window as unknown as { vs3d: unknown }).vs3d = { net, view, design, stats } }, [net, view, design, stats])
 
 
-  const roots = useMemo(() => {
+  // Roots, and how many each system has.
+  const { roots, rootsBy } = useMemo(() => {
     let n = 0
-    for (let v = 0; v < net.points; v++) if (!net.fixed[v] && (net.parent[v] < 0 || net.fixed[net.parent[v]])) n++
-    return n
+    const by = [0, 0, 0]
+    for (let v = 0; v < net.points; v++) if (!net.fixed[v] && (net.parent[v] < 0 || net.fixed[net.parent[v]])) { n++; by[Math.min(2, net.sys[v])]++ }
+    return { roots: n, rootsBy: by }
   }, [net])
+  // A system with no root grows nothing: Join needs both trees, and each interwoven system its own root.
+  const missing = s.systems > 1 ? SYSTEM_NAMES.slice(0, s.systems).filter((_, t) => rootsBy[t] === 0) : []
+  const missingText = missing.length && roots ? `System ${missing.join(' and ')} has no root yet, so it won’t grow${joining(s) ? ' and the trees can’t join' : ''}: pick ${missing[0]} in the bar above the model and click the model.` : ''
 
   const setModel = useCallback((doc: Design['model'], id: ModelId | 'imported') => {
     void model.change({ model: id }, null, { model: doc })
@@ -169,7 +179,7 @@ export function App() {
   const nothing: string | false = !s.showVeins ? 'The veins are hidden: show them (1) to export them.' : view.count === 0 ? 'Nothing has grown yet. Press Grow first.' : false
 
   // The skin's parts: each interwoven system on its own, or everything together.
-  const skinParts = () => {
+  const skinParts = (view: ReturnType<typeof veinView>) => {
     const colors = [s.colorA, s.colorB, s.colorC]
     const systems = interweaving(s) ? s.systems : 1
     const parts: { name: string; color: string; segs: Float64Array }[] = []
@@ -184,13 +194,13 @@ export function App() {
   }
   const skinWorker = useRef<Worker | null>(null)
   const jobs = useRef(0)
-  const buildSkin = (): Promise<Extract<SkinResult, { ok: true }>> => new Promise((resolve, reject) => {
+  const buildSkin = (view: ReturnType<typeof veinView>): Promise<Extract<SkinResult, { ok: true }>> => new Promise((resolve, reject) => {
     skinWorker.current ??= new Worker(new URL('./worker/export.worker.ts', import.meta.url), { type: 'module' })
     const id = ++jobs.current
     const w = skinWorker.current
     w.onmessage = (event: MessageEvent<SkinResult>) => { if (event.data.id !== id) return; if (event.data.ok) resolve(event.data); else reject(new Error(event.data.message)) }
     w.onerror = event => reject(new Error(event.message || 'The export worker stopped.'))
-    const job: SkinJob = { id, parts: skinParts(), perTip: DETAIL_PER_TIP[detail] }
+    const job: SkinJob = { id, parts: skinParts(view), perTip: DETAIL_PER_TIP[detail] }
     w.postMessage(job, job.parts.map(p => p.segs.buffer))
   })
   const exportSkin = async (kind: 'stl' | '3mf') => {
@@ -199,7 +209,9 @@ export function App() {
     setExporting('Building the tube skin…')
     setStatus({ text: 'Building the watertight tube skin… This can take a few seconds for many veins.' })
     try {
-      const skin = await buildSkin()
+      // The veins as they are now growth has stopped, with every width settled: the view drawn while growing can be a
+      // few steps behind, and interwoven systems are only narrowed apart once growth pauses.
+      const skin = await buildSkin(veinView(model.mirror.view(), s, { separate: true }))
       const problems = skin.parts.reduce((n, p) => n + p.problems, 0)
       // Joined: the model goes in as well, as another part of the same object; the slicer joins them into one solid.
       const withModel = s.mode === 'surface' && joined && !open
@@ -219,9 +231,11 @@ export function App() {
   }
   const exportObj = async () => {
     if (nothing) return
-    const text = centreLines(net, view, SYSTEM_NAMES)
+    await model.halt()
+    const now = model.mirror.view()
+    const text = centreLines(now, veinView(now, s, { separate: true }), SYSTEM_NAMES)
     const result = await saveFile(`${baseName}-centre-lines.obj`, text, 'model/obj', 'OBJ centre lines')
-    if (result === 'saved' || result === 'downloaded') setStatus({ text: `OBJ ${result}: ${count(net.points)} points, ${count(view.count)} segments, grouped by system and width.` })
+    if (result === 'saved' || result === 'downloaded') setStatus({ text: `OBJ ${result}: ${count(now.points)} points, grouped by system and width.` })
   }
   const exportPng = async (scale: number) => {
     const blob = await handle.current?.capture(scale, transparent)
@@ -244,7 +258,7 @@ export function App() {
     return `About ${count(Math.round(tris / 1e4) * 1e4)} triangles, ${bytes(tris * 50)} as STL.`
   }, [tab, running, view, detail])
 
-  const canGrow: string | false = !model.ready ? 'The model is still being prepared.'
+  const canGrow: string | false = !model.ready ? 'The model is still being prepared.' : model.placingRoots ? 'The roots are being placed.'
     : roots === 0 ? 'No roots yet: click the model with the Roots tool (O) to add one.'
       : stats.done === 'reached' ? 'Every attractor is reached. Reset to grow again, or add more attractors.' : false
   const resetBlocked: string | false = stats.step === 0 ? 'Nothing has grown yet.' : false
@@ -290,8 +304,9 @@ export function App() {
   const counts = `${count(stats.points)} vein ${stats.points === 1 ? 'point' : 'points'} · ${count(stats.live)} ${stats.live === 1 ? 'attractor' : 'attractors'} left · step ${count(stats.step)}`
   const doneText = stats.done ? DONE_TEXT[stats.done](stats.live, attractorCount) : ''
   const statusText = status?.text ?? (model.stopping ? 'Stopping after the current step…'
-    : running ? `Growing · ${counts}` : !model.ready ? 'Preparing the model…'
-      : doneText ? (stats.done === 'reached' ? `${doneText} ${counts}${joining(s) ? ` · ${count(net.links.length / 2)} joins` : ''}` : doneText) : roots ? `Ready: press Grow. ${counts}` : DONE_TEXT.empty(0, 0))
+    : running ? `Growing · ${counts}` : !model.ready ? 'Preparing the model…' : model.placingRoots ? 'Placing the roots…'
+      : missingText ? missingText
+        : doneText ? (stats.done === 'reached' ? `${doneText} ${counts}${joining(s) ? ` · ${count(net.links.length / 2)} joins` : ''}` : doneText) : roots ? `Ready: press Grow. ${counts}` : DONE_TEXT.empty(0, 0))
 
   return <main className="studio">
     <TooltipLayer />

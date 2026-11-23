@@ -1,0 +1,121 @@
+// Tests for problems the independent review and the QA rounds found. Each fails without its fix.
+import { describe, expect, it } from 'vitest'
+import type { MeshData } from '../lib/mesh'
+import { lens, sphere, vase } from '../lib/models'
+import { parseStl, StlError } from '../lib/stl'
+import { Engine, type GrowthParams } from './engine'
+import { PointGrid } from './grid'
+import { buildSdf, InsideDomain, scatterInside } from './inside'
+import { scatterSurface, SurfaceDomain } from './surface'
+
+const params: GrowthParams = { segment: 1, kill: 2, attraction: 0, topology: 'open', inertia: 0.25, wiggle: 0.1, pull: 0, pullMode: 'up', crowd: 0.45, clearance: 0, minLoop: 8, maxPoints: 100_000, seed: 1 }
+
+const flip = (m: MeshData): MeshData => {
+  const I = m.indices.slice()
+  for (let f = 0; f < I.length; f += 3) { const t = I[f + 1]; I[f + 1] = I[f + 2]; I[f + 2] = t }
+  return { positions: m.positions, indices: I }
+}
+
+// A closed box of small triangles, `a` mm on a side, centred on the origin.
+function box(a = 40, n = 8): MeshData {
+  const P: number[] = [], I: number[] = []
+  const faces: number[][][] = [
+    [[0, 0, 1], [1, 0, 0], [0, 1, 0]], [[0, 0, -1], [0, 1, 0], [1, 0, 0]], [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+    [[-1, 0, 0], [0, 0, 1], [0, 1, 0]], [[0, 1, 0], [0, 0, 1], [1, 0, 0]], [[0, -1, 0], [1, 0, 0], [0, 0, 1]],
+  ]
+  for (const [nrm, u, v] of faces) {
+    const base = P.length / 3
+    for (let j = 0; j <= n; j++) for (let i = 0; i <= n; i++) {
+      const s = (i / n - 0.5) * a, t = (j / n - 0.5) * a
+      P.push(nrm[0] * a / 2 + u[0] * s + v[0] * t, nrm[1] * a / 2 + u[1] * s + v[1] * t, nrm[2] * a / 2 + u[2] * s + v[2] * t)
+    }
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const q = base + j * (n + 1) + i; I.push(q, q + 1, q + n + 2, q, q + n + 2, q + n + 1) }
+  }
+  return { positions: Float32Array.from(P), indices: Uint32Array.from(I) }
+}
+
+describe('review fixes', () => {
+  it('places attractors in a tiny model, as from an STL saved in metres, without asking for billions of cells', () => {
+    // A 2 mm ball with a 0.975 mm clearance leaves room for a handful of grid points, so the attractors' spacing comes
+    // out a thousandth of the model: a grid of cells that fine would need hundreds of millions of them.
+    const dom = new InsideDomain(buildSdf(sphere(1, 3), 120).sdf)
+    const t0 = performance.now()
+    const placed = scatterInside(dom, { count: 20_000, placement: 'even', seed: 1, clearance: 0.975, shell: 2 })
+    expect(performance.now() - t0).toBeLessThan(3000)
+    expect(placed.short).toBe(true)
+  })
+
+  it('finds the way in from a click on a model whose triangles face inward', () => {
+    const dom = new InsideDomain(buildSdf(flip(sphere(15, 3)), 80).sdf)
+    // On a flipped sphere the face normal at the bottom points up, into the ball.
+    expect(dom.rootFromSkin([0, 0, -15], [0, 0, 1], 0.8, 1)).not.toBeNull()
+  })
+
+  it('counts the sealed hollow inside a hollow ball as outside', () => {
+    const outer = sphere(20, 3), inner = flip(sphere(14, 3))
+    const shell: MeshData = {
+      positions: Float32Array.from([...outer.positions, ...inner.positions]),
+      indices: Uint32Array.from([...outer.indices, ...Array.from(inner.indices, i => i + outer.positions.length / 3)]),
+    }
+    const dom = new InsideDomain(buildSdf(shell, 80).sdf)
+    expect(dom.at(0, 0, 0)).toBeGreaterThan(0)
+    expect(dom.at(17, 0, 0)).toBeLessThan(0)
+  })
+
+  it('finds points in the grid far from the file’s zero point', () => {
+    const grid = new PointGrid(0.25, [-8300, 0, 0])
+    const xs = [-8300], ys = [0], zs = [0]
+    grid.add(0, xs[0], ys[0], zs[0])
+    const found: number[] = []
+    grid.near(-8300.1, 0, 0, 4, xs, ys, zs, id => { found.push(id) })
+    expect(found).toEqual([0])
+  })
+
+  it('waits afresh for progress when a root is added after growth stalled', () => {
+    const dom = new InsideDomain(buildSdf(sphere(15, 3), 60).sdf)
+    const placed = scatterInside(dom, { count: 300, placement: 'even', seed: 1, clearance: 0.8, shell: 2 })
+    const e = new Engine(dom, { p: placed.p, n: null }, { ...params, clearance: 0.8 }, { roots: [{ at: [0, 0, 0] }] })
+    e.idle = 9999; e.done = 'stalled'
+    e.addRoot({ at: [5, 0, 0] })
+    expect(e.done).toBeNull()
+    expect(e.idle).toBe(0)
+  })
+
+  it('reads a text STL in capitals, and refuses one with a corner that isn’t a number', () => {
+    const tri = (v: string) => `SOLID T\nFACET NORMAL 0 0 1\nOUTER LOOP\nVERTEX 0 0 0\nVERTEX 1 0 0\nVERTEX ${v}\nENDLOOP\nENDFACET\nENDSOLID T\n`
+    expect(parseStl(new TextEncoder().encode(tri('0 1 0')).buffer as ArrayBuffer).indices.length).toBe(3)
+    expect(() => parseStl(new TextEncoder().encode(tri('0 nan 0')).buffer as ArrayBuffer)).toThrow(StlError)
+  })
+
+  it('starts a root for a model you opened where it fits: deep inside, or far from the rims', () => {
+    const dom = new InsideDomain(buildSdf(lens(20, 10, 3, 3), 120).sdf)
+    const at = dom.deepest(0, 1, 0.5)!
+    expect(-dom.at(...at)).toBeGreaterThan(0.5)
+    // A vase upside down, mouth on the floor: its lowest points are on the rim, where a root can't go.
+    const v = vase()
+    for (let i = 2; i < v.positions.length; i += 3) v.positions[i] = -v.positions[i]
+    const sheet = new SurfaceDomain({ positions: v.positions, indices: flip(v).indices })
+    const root = sheet.autoRoot(0, 1, 1)!
+    expect(sheet.rimDistance(...root.at, 200)).toBeGreaterThan(10)
+  })
+
+  it('turns a step over a sharp edge in one go, onto the next face', () => {
+    const dom = new SurfaceDomain(box())
+    const out = new Float64Array(6)
+    // 0.3 mm from the top face's edge at x = 20, heading straight over it, a 1 mm step.
+    expect(dom.step(19.7, 0, 20, 0, 0, 1, 1, 0, 0, 1, 0, out)).toBe(true)
+    expect(out[2]).toBeLessThan(19.5)
+    expect(out[0]).toBeCloseTo(20, 3)
+  })
+
+  it('grows surface veins round a box’s sharp edges, onto its sides and bottom', () => {
+    const dom = new SurfaceDomain(box())
+    const placed = scatterSurface(dom, { count: 1200, placement: 'even', seed: 1, clearance: 0 })
+    const e = new Engine(dom, placed, params, { roots: [dom.root([0, 0, 20], 0)!] })
+    for (let s = 0; s < 3000 && e.stepOnce() && !e.done; s++) { /* grow */ }
+    let low = 0
+    for (let i = 0; i < e.points; i++) if (e.z[i] < -15) low++
+    expect(low).toBeGreaterThan(50)
+    expect(e.live).toBeLessThan(60)
+  })
+})

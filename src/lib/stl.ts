@@ -41,9 +41,16 @@ export function readStlTriangles(buffer: ArrayBuffer): Float32Array<ArrayBuffer>
   }
   const text = new TextDecoder().decode(new Uint8Array(buffer))
   const values: number[] = []
-  const pattern = /vertex\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)/g
-  for (let match = pattern.exec(text); match; match = pattern.exec(text)) values.push(Number(match[1]), Number(match[2]), Number(match[3]))
-  return Float32Array.from(values.slice(0, values.length - (values.length % 9)))
+  // Every corner line, in any case, read as three numbers. A corner that isn't three plain numbers (nan, 1,5) stops
+  // the reading, rather than shifting every later corner into the wrong triangle.
+  const pattern = /^\s*vertex\s+(\S+)\s+(\S+)\s+(\S+)/gim
+  for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+    const xyz = [Number(match[1]), Number(match[2]), Number(match[3])]
+    if (!xyz.every(Number.isFinite)) throw new StlError('This STL has a corner that isn’t three plain numbers, so it can’t be read.')
+    values.push(...xyz)
+  }
+  if (values.length % 9) throw new StlError('This STL has a triangle with fewer than three corners, so it can’t be read.')
+  return Float32Array.from(values)
 }
 
 export function parseStl(buffer: ArrayBuffer): MeshData {

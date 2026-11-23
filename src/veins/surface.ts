@@ -38,6 +38,7 @@ export class SurfaceDomain implements Domain {
   private hit: HitPointInfo = { point: new Vector3(), distance: 0, faceIndex: 0 }
   private probe = new Vector3()
   private snapped = new Float64Array(6)
+  private probed = new Float64Array(6)
   private rimGrid: Map<number, number[]>
   private rimCell: number
 
@@ -175,17 +176,47 @@ export class SurfaceDomain implements Domain {
     const T = Math.hypot(tx, ty, tz)
     if (!(T > 1e-6)) return false
     tx /= T; ty /= T; tz /= T
-    const s = this.snapped
-    if (!this.snap(px + tx * length, py + ty * length, pz + tz * length, s, 2 * length)) return false
-    // On a curve the snap lands a little short: aim again along the chord, a full segment.
-    let dx = s[0] - px, dy = s[1] - py, dz = s[2] - pz
+    const s = this.snapped, probe = this.probed
+    // Walk the segment along the skin. Past a sharp outside edge the snap stops on the edge, short of the full length:
+    // the heading then turns over the edge as the surface does (from this face's normal to the next face's, found just
+    // past the edge), and the rest of the step goes on down the next face, up to three times.
+    let x = px, y = py, z = pz, nx = pnx, ny = pny, nz = pnz, left = length, folds = 0
+    for (let k = 0; k < 4 && left > 0.05 * length; k++) {
+      if (!this.snap(x + tx * left, y + ty * left, z + tz * left, s, 2 * length)) return false
+      const moved = Math.hypot(s[0] - x, s[1] - y, s[2] - z)
+      x = s[0]; y = s[1]; z = s[2]; nx = s[3]; ny = s[4]; nz = s[5]
+      if (moved >= 0.9 * left) { left = 0; break }
+      left -= moved
+      const e = 0.1 * length
+      if (!this.snap(x + tx * e - nx * e, y + ty * e - ny * e, z + tz * e - nz * e, probe, 2 * length)) break
+      const c = nx * probe[3] + ny * probe[4] + nz * probe[5]
+      if (c > 0.9999) break
+      // Rodrigues: turn the heading about the edge by the angle between the two faces' normals.
+      let ax = ny * probe[5] - nz * probe[4], ay = nz * probe[3] - nx * probe[5], az = nx * probe[4] - ny * probe[3]
+      const A = Math.hypot(ax, ay, az)
+      if (!(A > 1e-9)) break
+      ax /= A; ay /= A; az /= A
+      const sin = A, cos = c, dot = ax * tx + ay * ty + az * tz
+      const cx = ay * tz - az * ty, cy = az * tx - ax * tz, cz = ax * ty - ay * tx
+      let rx = tx * cos + cx * sin + ax * dot * (1 - cos), ry = ty * cos + cy * sin + ay * dot * (1 - cos), rz = tz * cos + cz * sin + az * dot * (1 - cos)
+      const q = rx * probe[3] + ry * probe[4] + rz * probe[5]
+      rx -= q * probe[3]; ry -= q * probe[4]; rz -= q * probe[5]
+      const L = Math.hypot(rx, ry, rz)
+      if (!(L > 1e-6)) break
+      tx = rx / L; ty = ry / L; tz = rz / L
+      folds++
+    }
+    let dx = x - px, dy = y - py, dz = z - pz
     let d = Math.hypot(dx, dy, dz)
     if (!(d > 0.25 * length)) return false
-    if (!this.snap(px + (dx / d) * length, py + (dy / d) * length, pz + (dz / d) * length, s, 2 * length)) return false
-    dx = s[0] - px; dy = s[1] - py; dz = s[2] - pz
-    d = Math.hypot(dx, dy, dz)
-    if (!(d > 0.25 * length)) return false
-    if (s[3] * pnx + s[4] * pny + s[5] * pnz < STEP_TURN) return false
+    if (!folds && d < 0.97 * length) {
+      // On a smooth curve the walk lands a little short: aim again along the chord, a full segment.
+      if (!this.snap(px + (dx / d) * length, py + (dy / d) * length, pz + (dz / d) * length, s, 2 * length)) return false
+      dx = s[0] - px; dy = s[1] - py; dz = s[2] - pz
+      d = Math.hypot(dx, dy, dz)
+      if (!(d > 0.25 * length)) return false
+    } else this.snap(x, y, z, s, length)
+    if (s[3] * pnx + s[4] * pny + s[5] * pnz < STEP_TURN && folds === 0) return false
     if (clear > 0 && this.rimDistance(s[0], s[1], s[2], clear) < clear) return false
     out.set(s)
     return true
@@ -208,6 +239,76 @@ export class SurfaceDomain implements Domain {
     if (!this.snap(point[0], point[1], point[2], s)) return null
     if (clearance > 0 && this.rimDistance(s[0], s[1], s[2], clearance) < clearance) return null
     return { at: [s[0], s[1], s[2]], normal: [s[3], s[4], s[5]] }
+  }
+
+  // A root when nowhere better is known, such as on a model you opened: on an open sheet, the point farthest from its
+  // rims along the surface; on a closed model, its top, so veins hang down over it. With several systems, each root is
+  // chosen within its own slice across the model's longest side, so they start apart.
+  autoRoot(system: number, systems: number, clearance: number): { at: Vec3; normal: Vec3 } | null {
+    const P = this.positions
+    const { lo, hi } = meshBounds(P)
+    const span = [hi[0] - lo[0], hi[1] - lo[1]]
+    const axis = span[0] >= span[1] ? 0 : 1
+    const n = Math.max(1, systems), t = Math.max(0, Math.min(n - 1, system))
+    const from = lo[axis] + (span[axis] * t) / n, to = lo[axis] + (span[axis] * (t + 1)) / n
+    const score = this.open ? this.rimGeodesic() : null
+    let best = -Infinity, at = -1
+    for (let v = 0; v < P.length / 3; v++) {
+      const i = v * 3
+      if (P[i + axis] < from || P[i + axis] > to) continue
+      const value = score ? score[v] + 1e-6 * P[i + 2] : P[i + 2]
+      if (value > best) { best = value; at = i }
+    }
+    if (at < 0) return null
+    return this.root([P[at], P[at + 1], P[at + 2]], clearance)
+  }
+
+  // Each vertex's distance from the nearest open rim, along the mesh's edges (Dijkstra from every rim vertex at once).
+  private rimGeodesic(): Float64Array {
+    const P = this.positions, I = this.indices, n = P.length / 3
+    const start = new Uint32Array(n + 1)
+    for (let i = 0; i < I.length; i++) start[I[i] + 1] += 2
+    for (let v = 0; v < n; v++) start[v + 1] += start[v]
+    const to = new Uint32Array(start[n]), fill = start.slice(0, n)
+    for (let f = 0; f < I.length; f += 3) for (let j = 0; j < 3; j++) {
+      const a = I[f + j], b = I[f + (j + 1) % 3], c = I[f + (j + 2) % 3]
+      to[fill[a]++] = b; to[fill[a]++] = c
+    }
+    const dist = new Float64Array(n).fill(Infinity)
+    // A binary heap of [distance, vertex].
+    const heapD: number[] = [], heapV: number[] = []
+    const push = (d: number, v: number) => {
+      let i = heapD.length
+      heapD.push(d); heapV.push(v)
+      while (i > 0) { const p = (i - 1) >> 1; if (heapD[p] <= heapD[i]) break; [heapD[p], heapD[i]] = [heapD[i], heapD[p]]; [heapV[p], heapV[i]] = [heapV[i], heapV[p]]; i = p }
+    }
+    const pop = () => {
+      const d = heapD[0], v = heapV[0], lastD = heapD.pop()!, lastV = heapV.pop()!
+      if (heapD.length) {
+        heapD[0] = lastD; heapV[0] = lastV
+        let i = 0
+        for (;;) {
+          const l = 2 * i + 1, r = l + 1
+          let m = i
+          if (l < heapD.length && heapD[l] < heapD[m]) m = l
+          if (r < heapD.length && heapD[r] < heapD[m]) m = r
+          if (m === i) break
+          ;[heapD[m], heapD[i]] = [heapD[i], heapD[m]]; [heapV[m], heapV[i]] = [heapV[i], heapV[m]]; i = m
+        }
+      }
+      return [d, v]
+    }
+    for (const loop of this.rims) for (const v of loop) if (dist[v] > 0) { dist[v] = 0; push(0, v) }
+    while (heapD.length) {
+      const [d, v] = pop()
+      if (d > dist[v]) continue
+      for (let k = start[v]; k < start[v + 1]; k++) {
+        const u = to[k]
+        const nd = d + Math.hypot(P[u * 3] - P[v * 3], P[u * 3 + 1] - P[v * 3 + 1], P[u * 3 + 2] - P[v * 3 + 2])
+        if (nd < dist[u]) { dist[u] = nd; push(nd, u) }
+      }
+    }
+    return dist
   }
 
   // Roots spread evenly along the longest open rim, `count` of them, each moved onto the surface `inset` from the rim.

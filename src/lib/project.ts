@@ -68,6 +68,7 @@ function rootList(raw: unknown): RootRequest[] {
     if (q.kind === 'skin' && isVec(q.point) && isVec(q.normal)) return { kind: 'skin', point: q.point as [number, number, number], normal: q.normal as [number, number, number], system }
     if (q.kind === 'inside' && isVec(q.point)) return { kind: 'inside', point: q.point as [number, number, number], system }
     if (q.kind === 'rim' && isNum(q.count)) return { kind: 'rim', count: Math.max(1, Math.min(64, Math.round(q.count))), systems: isNum(q.systems) ? Math.max(1, Math.min(3, Math.round(q.systems))) : 1 }
+    if (q.kind === 'auto') return { kind: 'auto', system, systems: isNum(q.systems) ? Math.max(1, Math.min(3, Math.round(q.systems))) : 1 }
     throw new ProjectError('This project file is damaged: a root can’t be read.')
   })
 }
@@ -100,6 +101,8 @@ export function parseProject(text: string): Design {
     sys: a.sys ? unpack(a.sys, 'u8', 'attractors') as Uint8Array : null,
   } : null
   if (attractors && attractors.p.length % 3) throw new ProjectError('This project file is damaged: an attractor is missing a coordinate.')
+  if (attractors?.n && attractors.n.length !== attractors.p.length) throw new ProjectError('This project file is damaged: its attractors’ normals don’t line up.')
+  if (attractors?.sys && (attractors.sys.length !== attractors.p.length / 3 || attractors.sys.some(t => t > 2 && t !== 255))) throw new ProjectError('This project file is damaged: its attractors’ systems don’t line up.')
   const k = attractors ? attractors.p.length / 3 : 0
   let growth: Growth | null = null
   const g = f.growth as Record<string, unknown> | null
@@ -114,6 +117,7 @@ export function parseProject(text: string): Design {
     for (let i = 0; i < n; i++) if (parent[i] < -1 || parent[i] >= i) throw new ProjectError('This project file is damaged: a vein point grows from one that comes after it.')
     for (const list of [joins, links]) if (list.length % 2 || list.some(j => j < 0 || j >= n)) throw new ProjectError('This project file is damaged: a join links a vein point that isn’t there.')
     if (fixed.some(i => i < 0 || i >= n)) throw new ProjectError('This project file is damaged: an entry point isn’t there.')
+    if (sys.some(t => t < 0 || t > 2)) throw new ProjectError('This project file is damaged: a vein point belongs to a system that isn’t there.')
     if (used.length !== k) throw new ProjectError('This project file is damaged: its attractors don’t match its veins.')
     if (!isNum(g.step) || !isNum(g.rng)) throw new ProjectError('This project file is damaged: its growth step is missing.')
     growth = {

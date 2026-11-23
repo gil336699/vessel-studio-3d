@@ -360,6 +360,34 @@ export function closedRemesh(P: ArrayLike<number>, I: ArrayLike<number>, { spaci
   return { ...mesh, insideShare: near ? inside / near : 0 }
 }
 
+// Whether a point is inside a closed surface, by three rays in odd directions: each counts the triangles it crosses
+// (Möller–Trumbore), an odd count means inside, and the majority wins.
+export function insideByRays(P: ArrayLike<number>, I: ArrayLike<number>, ox: number, oy: number, oz: number): boolean {
+  const dirs = [[0.8659, 0.3712, 0.3352], [-0.2873, 0.9124, -0.2915], [0.1567, -0.3061, 0.9390]]
+  let votes = 0
+  for (const [dx, dy, dz] of dirs) {
+    let crossings = 0
+    for (let f = 0; f < I.length; f += 3) {
+      const a = I[f] * 3, b = I[f + 1] * 3, c = I[f + 2] * 3
+      const e1x = P[b] - P[a], e1y = P[b + 1] - P[a + 1], e1z = P[b + 2] - P[a + 2]
+      const e2x = P[c] - P[a], e2y = P[c + 1] - P[a + 1], e2z = P[c + 2] - P[a + 2]
+      const px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x
+      const det = e1x * px + e1y * py + e1z * pz
+      if (Math.abs(det) < 1e-18) continue
+      const inv = 1 / det
+      const tx = ox - P[a], ty = oy - P[a + 1], tz = oz - P[a + 2]
+      const u = (tx * px + ty * py + tz * pz) * inv
+      if (u < 0 || u > 1) continue
+      const qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x
+      const w = (dx * qx + dy * qy + dz * qz) * inv
+      if (w < 0 || u + w > 1) continue
+      if ((e2x * qx + e2y * qy + e2z * qz) * inv > 1e-9) crossings++
+    }
+    if (crossings % 2 === 1) votes++
+  }
+  return votes >= 2
+}
+
 // The signed distance (mm) to the closed model (P, I) at every point of a grid with spacing v: negative inside. Like
 // closedRemesh, the outside is flooded from the grid's edge a closing radius away from the surface and then grown back
 // by that radius, so gaps narrower than about two closing radii are sealed and count as inside. `inside` counts the
@@ -371,6 +399,27 @@ export function signedDistance(P: ArrayLike<number>, I: ArrayLike<number>, { v, 
   const D = surfaceDistance(P, I, grid)
   const closeV2 = (close / v) ** 2
   const far = floodOutside(nx, ny, nz, q => D[q] > closeV2)
+  // Sealed hollows: a region the outside flood can't reach can still lie outside the solid, as the void inside a
+  // hollow ball. Rays from one point of each such region settle it: an even number of crossings means outside, and
+  // the region joins the outside. Three rays vote, so a ray through a tiny crack can't turn the whole solid inside out.
+  const seen = new Uint8Array(N), queue = new Int32Array(N)
+  for (let q = 0; q < N; q++) {
+    if (far[q] || seen[q] || !(D[q] > closeV2)) continue
+    let head = 0, tail = 0
+    queue[tail++] = q; seen[q] = 1
+    while (head < tail) {
+      const c = queue[head++], i = c % nx, j = ((c / nx) | 0) % ny, k = (c / (nx * ny)) | 0
+      const visit = (m: number) => { if (!far[m] && !seen[m] && D[m] > closeV2) { seen[m] = 1; queue[tail++] = m } }
+      if (i > 0) visit(c - 1); if (i < nx - 1) visit(c + 1)
+      if (j > 0) visit(c - nx); if (j < ny - 1) visit(c + nx)
+      if (k > 0) visit(c - nx * ny); if (k < nz - 1) visit(c + nx * ny)
+    }
+    // A speck under 64 grid points can't matter for growth, and a folded model has hundreds of them, each a ray test
+    // against every triangle: they stay as they are.
+    if (tail < 64) continue
+    const i = q % nx, j = ((q / nx) | 0) % ny, k = (q / (nx * ny)) | 0
+    if (!insideByRays(P, I, grid.origin[0] + i * v, grid.origin[1] + j * v, grid.origin[2] + k * v)) for (let m = 0; m < tail; m++) far[queue[m]] = 1
+  }
   const G = new Float32Array(N)
   for (let q = 0; q < N; q++) G[q] = far[q] ? 0 : 1e20
   edt3(G, nx, ny, nz)

@@ -50,3 +50,11 @@ describe('project files', () => {
     expect(() => parseProject(JSON.stringify({ ...good, schema: SCHEMA, roots: [{ kind: 'skin', point: [0, 0] }] }))).toThrow(/root/)
   })
 })
+
+describe('project files with mismatched arrays', () => {
+  it('refuse attractor systems that don’t line up with the attractors', () => {
+    const good = JSON.parse(projectJson(design(), 'test'))
+    good.attractors.sys = { type: 'u8', data: btoa('\x00') }
+    expect(() => parseProject(JSON.stringify(good))).toThrow(/systems don’t line up/)
+  })
+})
