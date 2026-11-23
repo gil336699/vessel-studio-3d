@@ -46,6 +46,14 @@ export const hasGrown = (d: Design) => Boolean(d.growth && d.growth.step > 0)
 // The attractors to send with a load: the design's own, if they were placed for these settings.
 export const attractorsFor = (d: Design) => (d.attractors && d.placedFor === scatterKey(d.settings) ? d.attractors : null)
 
+// The design to grow again from the roots, with new settings or a new model. Attractors placed for another model never
+// carry over, even when the attractor settings are the same: a new model, or the same one at a new size, is somewhere
+// else, and veins would grow toward points that aren't in it.
+export function regrown(d: Design, settings: Settings, model: ModelDoc): Design {
+  const same = model === d.model
+  return { ...d, settings, model, growth: null, attractors: same ? d.attractors : null, placedFor: same ? d.placedFor : '' }
+}
+
 // The point of the skin nearest `target`, with its normal.
 export function skinPoint(mesh: MeshData, target: Vec3, normals = vertexNormals(mesh)): { point: Vec3; normal: Vec3 } {
   const P = mesh.positions

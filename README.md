@@ -60,7 +60,7 @@ GitHub Actions builds the app and publishes it to GitHub Pages on every push to 
 1. **Choose where veins grow** on the Model tab: Inside or On the surface. Pick a built-in model, or open your own STL.
 2. **Pick a preset** on the Grow tab. Each sets the growth and a look, with its lengths fitted to the model's size from a 100 mm reference. A preset brings its own model, unless your STL is open. On your STL, the roots go where it suits best: the deepest point inside, the point farthest from an open rim, or the top of a closed model. Lattice and Roots round a pot put six roots along the rim, or round the top of a closed model.
 3. **Place roots** if you like: press O for the Roots tool and click the model. Inside, a root enters where you click, as an artery enters an organ. Choose **In the middle** (or Shift-click) to start it deep inside instead. With two or three systems, pick A, B or C first.
-4. **Grow:** press Space, or Grow. Growth settings change live while veins grow. Settings that place the attractors again start the veins over: the attractor settings, Where veins grow, and the systems.
+4. **Grow:** press Space, or Grow. Growth settings change live while veins grow. Settings that place the attractors again start the veins over: the attractor settings, Where veins grow, the systems, and a new model or size.
 5. **Look:** Murray's law or even widths, the tip and widest widths in mm, and colours.
 6. **Export** on the Export tab, or save a project to carry on later exactly where it stopped.
 

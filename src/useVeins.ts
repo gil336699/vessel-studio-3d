@@ -2,7 +2,7 @@
 // and the growth worker. The worker owns the veins while they grow. The page keeps a mirror that each frame adds to,
 // for drawing, and copies it into the design when growth stops. (The pattern of Vessel Studio's useVeins.)
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { attractorsFor, defaultRequests, engineState, hasGrown, type Design, type Growth, type ModelDoc } from './lib/design'
+import { attractorsFor, defaultRequests, engineState, hasGrown, regrown, type Design, type Growth, type ModelDoc } from './lib/design'
 import { emptyHistory, record, redo as redoStep, undo as undoStep, type History } from './lib/history'
 import { growthParams, scatterKey, scatterSpec, type Settings } from './lib/settings'
 import type { Attractors } from './veins/domain'
@@ -303,7 +303,7 @@ export function useVeins(initial: () => { design: Design; saved: boolean }, setS
       await halt()
       const now = current()
       remember(now, key)
-      const next: Design = { ...now, settings: { ...now.settings, ...patch }, model, growth: null }
+      const next = regrown(now, { ...now.settings, ...patch }, model)
       if (newRoots) next.roots = defaultRequests(next)
       restart(next)
       if (hasGrown(now) && !opts.quiet) statusRef.current({ text: newRoots ? 'The veins started again for the new model or systems. Undo brings them back.' : 'The veins started again for the new attractors. Undo brings them back.' })
