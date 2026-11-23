@@ -21,8 +21,10 @@ import { LINK, veinView } from './lib/view'
 import { useMedia } from './useMedia'
 import { useVeins, type Status } from './useVeins'
 import type { SkinJob, SkinResult } from './worker/export.worker'
+import { version } from '../package.json'
 
-const VERSION = '0.1.0'
+// Written into project files; it comes from package.json, so it moves with every release.
+const VERSION = version
 const QUICK_START_KEY = 'vessel-studio-3d:quick-start-seen'
 
 const storage = {
@@ -305,6 +307,16 @@ export function App() {
     return () => window.removeEventListener('keydown', onKey)
   })
 
+  // The design isn't kept between visits, so closing or reloading the page with grown veins that aren't saved asks
+  // first, in the browser's own dialog (the only one a page may show as it closes).
+  const atRisk = model.unsaved && stats.step > 0
+  useEffect(() => {
+    if (!atRisk) return
+    const ask = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
+    window.addEventListener('beforeunload', ask)
+    return () => window.removeEventListener('beforeunload', ask)
+  }, [atRisk])
+
   const counts = `${count(stats.points)} vein ${stats.points === 1 ? 'point' : 'points'} · ${count(stats.live)} ${stats.live === 1 ? 'attractor' : 'attractors'} left · step ${count(stats.step)}`
   const doneText = stats.done ? DONE_TEXT[stats.done](stats.live, attractorCount) : ''
   const statusText = status?.text ?? (model.stopping ? 'Stopping after the current step…'
@@ -321,7 +333,7 @@ export function App() {
     <header className="brand glass">
       <div><p className="app-kicker" data-tip="How it works: points are scattered in or on the model, and veins grow toward them, using up each one they reach.">Space colonization in 3D</p><h1>Vessel Studio 3D</h1></div>
       <div className="brand-actions">
-        {model.unsaved && stats.step > 0 && <span className="dot" role="img" aria-label="Unsaved changes" data-tip="Unsaved changes: save a project (⌘S) to keep them." />}
+        {atRisk && <span className="dot" role="img" aria-label="Unsaved changes" data-tip="Unsaved changes: save a project (⌘S) to keep them." />}
         <button type="button" className="icon-button" aria-label="Keyboard shortcuts and help" data-tip="Keyboard shortcuts and the quick start." data-key="?" onClick={() => setShowHelp(true)}>?</button>
       </div>
     </header>
@@ -331,7 +343,7 @@ export function App() {
         { id: 'model', label: 'Model', title: 'Where veins grow, the model, the attractors and the roots.' },
         { id: 'grow', label: 'Grow', title: 'Presets, systems and how the veins grow.' },
         { id: 'look', label: 'Look', title: 'Vein widths by Murray’s law, and colours.' },
-        { id: 'export', label: 'Export', title: 'STL and 3MF to print, OBJ centre lines, pictures, and project files.', badge: model.unsaved && stats.step > 0 ? 'unsaved changes' : undefined },
+        { id: 'export', label: 'Export', title: 'STL and 3MF to print, OBJ centre lines, pictures, and project files.', badge: atRisk ? 'unsaved changes' : undefined },
       ]} />
       <TabPanel idBase="design" id="model" value={tab}>
         <ModelPanel s={s} change={change} modelName={modelName} triangles={design.model.mesh.indices.length / 3} open={open} info={model.info} size={size}

@@ -1,8 +1,11 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { builtInModel, defaultRequests, modelDoc, type Design } from './design'
+import { Engine } from '../veins/engine'
+import { buildSdf, InsideDomain } from '../veins/inside'
+import { builtInModel, defaultRequests, engineState, modelDoc, type Design } from './design'
 import { sphere } from './models'
 import { parseProject, ProjectError, projectJson, SCHEMA } from './project'
-import { DEFAULTS } from './settings'
+import { DEFAULTS, growthParams } from './settings'
 
 function design(): Design {
   const model = builtInModel('lens')
@@ -56,5 +59,23 @@ describe('project files with mismatched arrays', () => {
     const good = JSON.parse(projectJson(design(), 'test'))
     good.attractors.sys = { type: 'u8', data: btoa('\x00') }
     expect(() => parseProject(JSON.stringify(good))).toThrow(/systems don’t line up/)
+  })
+})
+
+describe('project files saved by earlier versions', () => {
+  it('open and carry on growing: a kidney saved by the app at step 25, before 1.0.0', () => {
+    const text = readFileSync(new URL('../../test-fixtures/kidney-step-25.vessel3d.json', import.meta.url), 'utf8')
+    const d = parseProject(text)
+    expect(d.model.source).toEqual({ kind: 'built-in', id: 'bean' })
+    expect(d.roots).toHaveLength(1)
+    expect(d.attractors!.p.length / 3).toBe(3000)
+    const g = d.growth!
+    expect(g.step).toBe(25)
+    expect(g.x.length).toBe(1017)
+    expect(g.used.filter(u => u === 0).length).toBe(2696)
+    // The saved state still drives the engine.
+    const engine = new Engine(new InsideDomain(buildSdf(d.model.mesh).sdf), d.attractors!, growthParams(d.settings), { state: engineState(g)! })
+    const change = engine.stepOnce()
+    expect(change && change.grew).toBeGreaterThan(0)
   })
 })
