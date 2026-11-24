@@ -231,6 +231,8 @@ export function createRunner(post: (message: FromRunner, transfer: Transferable[
           const root = d.autoRoot(r.system, r.systems, clear)
           if (root) added.push({ ...root, system: r.system })
           else refused = 'No spot on this model is clear of its rims for a root. Try a smaller edge clearance.'
+        } else if (d.onUnderside(r.point[0], r.point[1], r.point[2])) {
+          refused = 'That spot is on the underside the model stands on. Veins stay off it, so the model sits flat when it’s printed.'
         } else {
           const root = d.root(r.point, clear)
           if (root) added.push({ ...root, system: r.system })

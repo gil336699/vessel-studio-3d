@@ -6,7 +6,11 @@
 // gap between a pot and its saucer, say), when it hardly moves (stuck at a rim), or when it comes nearer an open rim
 // than the edge clearance. An attractor pulls only veins on its own piece whose normal doesn't face away from its own,
 // so veins never pair across a thin wall, a narrow gap or a gap between pieces.
-import { BufferAttribute, BufferGeometry, Vector3 } from 'three'
+//
+// On a closed model, veins also stay off the underside it stands on: skin facing down with too little room below it,
+// down to the bed or to another piece of the model. No attractors go there, and steps and roots there are refused. A
+// vein on a pot's bottom would lift it off the bed, or fill the gap to its saucer and join the two in a print.
+import { BufferAttribute, BufferGeometry, DoubleSide, Ray, Vector3 } from 'three'
 import { MeshBVH, type HitPointInfo } from 'three-mesh-bvh'
 import { meshBounds, openEdges, rimLoops, type MeshData, type Vec3 } from '../lib/mesh'
 import type { Domain } from './domain'
@@ -20,6 +24,10 @@ const SIGHT = -0.5
 const JOIN = 0.2
 // Faces within this angle share their normals at a corner; sharper edges, such as a box's, keep each face's own.
 const CREASE = Math.cos(Math.PI / 3)
+// The underside: triangles facing more than 30° below level, with less room below them than this share of the model's
+// longest side, about as much as the widest vein the presets grow (5 % of the model's size).
+const UNDERSIDE = -0.5
+const BASE_ROOM = 0.05
 
 export class SurfaceDomain implements Domain {
   readonly kind = 'surface'
@@ -50,6 +58,8 @@ export class SurfaceDomain implements Domain {
   // stays on the piece it starts on: one that crossed the gap between two would join them in a print.
   readonly regions: number
   private faceRegion: Int32Array | null
+  // 1 for each triangle on the underside a closed model stands on, which veins stay off.
+  readonly underside: Uint8Array
 
   constructor(mesh: MeshData) {
     const geometry = new BufferGeometry()
@@ -115,6 +125,8 @@ export class SurfaceDomain implements Domain {
     const parts = facePieces(I, P.length / 3)
     this.regions = parts.count
     this.faceRegion = parts.count > 1 ? parts.face : null
+    const size = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2])
+    this.underside = edges.length ? new Uint8Array(faces) : undersideFaces(P, I, FN, this.bvh, this.faceRegion, lo[2], BASE_ROOM * size)
     this.rimCell = Math.max(longest, this.span / 200, 1e-6)
     this.rimGrid = new Map()
     for (let s = 0; s < this.rimSegments.length / 6; s++) {
@@ -126,6 +138,11 @@ export class SurfaceDomain implements Domain {
   }
 
   get open() { return this.rimSegments.length > 0 }
+
+  // Whether the skin nearest a point is on the underside the model stands on.
+  onUnderside(x: number, y: number, z: number): boolean {
+    return this.snap(x, y, z, this.probed) && this.underside[this.hit.faceIndex] === 1
+  }
 
   // The piece of the model a point on it is on, from 0.
   region(x: number, y: number, z: number): number {
@@ -234,11 +251,11 @@ export class SurfaceDomain implements Domain {
       d = Math.hypot(dx, dy, dz)
       if (!(d > 0.25 * length)) return false
     } else this.snap(x, y, z, s, length)
-    if (this.faceRegion) {
-      // Landed on another piece: it jumped the gap between them.
-      const landed = this.faceRegion[this.hit.faceIndex]
-      if (landed !== (region >= 0 ? region : this.region(px, py, pz))) return false
-    }
+    const landed = this.hit.faceIndex
+    // On the underside the model stands on.
+    if (this.underside[landed]) return false
+    // Landed on another piece: it jumped the gap between them.
+    if (this.faceRegion && this.faceRegion[landed] !== (region >= 0 ? region : this.region(px, py, pz))) return false
     if (s[3] * pnx + s[4] * pny + s[5] * pnz < STEP_TURN && folds === 0) return false
     if (clear > 0 && this.rimDistance(s[0], s[1], s[2], clear) < clear) return false
     out.set(s)
@@ -260,6 +277,7 @@ export class SurfaceDomain implements Domain {
   root(point: Vec3, clearance: number): { at: Vec3; normal: Vec3 } | null {
     const s = new Float64Array(6)
     if (!this.snap(point[0], point[1], point[2], s)) return null
+    if (this.underside[this.hit.faceIndex]) return null
     if (clearance > 0 && this.rimDistance(s[0], s[1], s[2], clearance) < clearance) return null
     return { at: [s[0], s[1], s[2]], normal: [s[3], s[4], s[5]] }
   }
@@ -391,10 +409,30 @@ export class SurfaceDomain implements Domain {
       const fb = okB ? this.rimDistance(q2[0], q2[1], q2[2], 4 * d) : -1
       const pick = (fa === Infinity ? 1e9 : fa) >= (fb === Infinity ? 1e9 : fb) ? q : q2
       if (!okA && !okB) continue
+      if (this.onUnderside(pick[0], pick[1], pick[2])) continue
       out.push({ at: [pick[0], pick[1], pick[2]], normal: [pick[3], pick[4], pick[5]] })
     }
     return out
   }
+}
+
+// Triangles on the underside a closed model stands on: facing down, with less than `room` below them, down to the bed
+// (the model's lowest point, `bottom`) or to another piece of the model straight below. The same piece below, as under
+// a fold, doesn't count: a vein there only joins the model to itself.
+function undersideFaces(P: Float32Array, I: Uint32Array, FN: Float64Array, bvh: MeshBVH, faceRegion: Int32Array | null, bottom: number, room: number): Uint8Array {
+  const faces = I.length / 3, out = new Uint8Array(faces)
+  const ray = new Ray(new Vector3(), new Vector3(0, 0, -1))
+  for (let f = 0; f < faces; f++) {
+    if (!(FN[f * 3 + 2] < UNDERSIDE)) continue
+    const a = I[f * 3] * 3, b = I[f * 3 + 1] * 3, c = I[f * 3 + 2] * 3
+    const cx = (P[a] + P[b] + P[c]) / 3, cy = (P[a + 1] + P[b + 1] + P[c + 1]) / 3, cz = (P[a + 2] + P[b + 2] + P[c + 2]) / 3
+    if (cz - bottom < room) { out[f] = 1; continue }
+    if (!faceRegion) continue
+    ray.origin.set(cx, cy, cz)
+    const hit = bvh.raycastFirst(ray, DoubleSide, 1e-4 * room, room)
+    if (hit && hit.faceIndex !== undefined && hit.faceIndex !== null && faceRegion[hit.faceIndex] !== faceRegion[f]) out[f] = 1
+  }
+  return out
 }
 
 // Each triangle's piece of the model, by triangles that share corners, and how many pieces there are.
@@ -428,7 +466,8 @@ export function scatterSurface(dom: SurfaceDomain, o: SurfaceScatter): { p: Floa
   // Each face's weight: its area, times its painted density.
   const cdf = new Float64Array(faces + 1)
   for (let f = 0; f < faces; f++) {
-    let w = dom.faceArea[f]
+    // None on the underside the model stands on, which veins stay off.
+    let w = dom.underside[f] ? 0 : dom.faceArea[f]
     if (painted) w *= Math.max(0, (painted[I[f * 3]] + painted[I[f * 3 + 1]] + painted[I[f * 3 + 2]]) / 3)
     cdf[f + 1] = cdf[f] + w
   }

@@ -132,7 +132,7 @@ describe('review fixes', () => {
     expect(e.rootless()).toBe(onPlate)
   })
 
-  it('grows surface veins round a box’s sharp edges, onto its sides and bottom', () => {
+  it('grows surface veins round a box’s sharp edges, down its sides, and off the bottom it stands on', () => {
     const dom = new SurfaceDomain(box())
     const placed = scatterSurface(dom, { count: 1200, placement: 'even', seed: 1, clearance: 0 })
     const e = new Engine(dom, placed, params, { roots: [dom.root([0, 0, 20], 0)!] })
@@ -141,5 +141,18 @@ describe('review fixes', () => {
     for (let i = 0; i < e.points; i++) if (e.z[i] < -15) low++
     expect(low).toBeGreaterThan(50)
     expect(e.live).toBeLessThan(60)
+    // Found by slicing 1.1's exports: roots grown over a pot's bottom left it resting on veins, and in the gap above its
+    // saucer the slicer couldn't support them. The box's bottom gets no attractors, no veins and no roots.
+    // On the bottom face: at its height and inside its edges (points on a side's bottom edge are on the side).
+    const onBottom = (x: number, y: number, z: number) => z < -19.99 && Math.abs(x) < 19.9 && Math.abs(y) < 19.9
+    let veinsOnBottom = 0, attractorsOnBottom = 0
+    for (let i = 0; i < e.points; i++) if (onBottom(e.x[i], e.y[i], e.z[i])) veinsOnBottom++
+    for (let a = 0; a < placed.p.length / 3; a++) if (onBottom(placed.p[a * 3], placed.p[a * 3 + 1], placed.p[a * 3 + 2])) attractorsOnBottom++
+    expect(veinsOnBottom).toBe(0)
+    expect(attractorsOnBottom).toBe(0)
+    expect(dom.root([5, 5, -20], 0)).toBeNull()
+    expect(dom.onUnderside(5, 5, -20)).toBe(true)
+    // Its sides, down to the bottom edge, are not the underside.
+    expect(dom.onUnderside(20, 5, -19.5)).toBe(false)
   })
 })

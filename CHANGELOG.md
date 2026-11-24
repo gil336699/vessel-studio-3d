@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.1 2026-11-23
+
+Prints sit flat.
+
+- **On a closed model, veins stay off the underside it stands on:** skin facing down with too little room below it, down to the bed or to another part of the model. No attractors go there, and roots and steps there are refused. Slicing 1.1's designer jobs for a Bambu A1 mini found the problem: Roots round a pot had grown 745 vein points facing down on the springpot, about 470 of them on the pot's bottom in the 1 mm gap above its saucer, and the slicer found 12 overhangs it couldn't support there. Now no vein grows there, and the pot's slice has no warnings.
+- **Clicking the underside with the Roots tool says why** no root goes there.
+- The heart, the brain and the ZuluTag lose the few veins on their bases: over the brain, 375 of 3,000 attractors are left (326 with 1.1.0), and over the heart 4 (none with 1.1.0). Printed as veins alone, the heart's net no longer touches the bed and needs a little more support: 54 g of PLA, not 48 g.
+- Open models, Inside, and the other presets grow exactly as before.
+- **The README lists the six designer prints, sliced for a Bambu A1 mini:** print time, filament, supports and warnings.
+
 ## 1.1.0 2026-11-23
 
 Veins now reach round folds and thin walls.

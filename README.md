@@ -69,6 +69,7 @@ GitHub Actions builds the app and publishes it to GitHub Pages on every push to 
 - **STL** holds the tubes as one watertight solid, in millimetres.
 - **3MF** holds the same tubes with their colours. Interwoven systems are each their own part, for multi-colour printers.
 - **On the surface**, choose **Veins alone** for a lattice, such as a lamp shade or a vase of veins, or **With the model** for the model with raised veins. With the model, the two are parts of one object, and the slicer joins them as it slices. An open sheet has no thickness, so it prints veins alone.
+- **The underside stays clear.** On a closed model, veins don't grow on the skin it stands on, so it sits flat on the bed, and a part resting just above another, as a pot in its saucer, isn't joined to it by veins.
 - **Detail** sets how fine the tube surface is: Draft, Normal or Fine. The Export tab estimates the triangles and the file size before you export.
 - **Tip width:** about 0.8 mm for a filament printer with a 0.4 mm nozzle, about 0.3 mm for resin.
 - **Edge clearance** keeps vein centre lines that far from the wall. To keep whole tubes inside the skin, make it more than half the widest vein near the wall.
@@ -78,7 +79,7 @@ GitHub Actions builds the app and publishes it to GitHub Pages on every push to 
 
 - STL, binary or text, read as millimetres, up to 1,500,000 triangles.
 - **Inside** needs a closed model, or one with a few openings, which are capped flat. Veins fill only what is at least the edge clearance from the wall, so thin walls leave little room.
-- **On the surface** works on any model: closed, or an open sheet with rims. Veins keep the edge clearance from the rims.
+- **On the surface** works on any model: closed, or an open sheet with rims. Veins keep the edge clearance from the rims. A model in separate pieces, such as a pot and its saucer, needs a root on each piece that should have veins.
 - **Longest side** on the Model tab scales the model. Choose a preset again afterwards to fit the lengths to the new size.
 
 ## Feature reference
@@ -196,6 +197,7 @@ Each step does three things.
 2. **Grow.** Every pulled point grows one new point a segment length away, toward the average direction of its attractors, blended with Keep heading, Wiggle and Pull.
    - **Inside**, a step that would leave the model, or come nearer the wall than the edge clearance anywhere along it, is refused.
    - **On the surface**, a step is laid along the skin. It lands on the nearest point of the surface, and at an edge it turns over the edge as the surface does, up to four times a step. A step that would jump to another sheet or another piece of the model, or come nearer an open rim than the edge clearance, is refused. Pieces are told apart by the corners their triangles share, so a vein never crosses the gap between a pot and its saucer, which a print would join.
+   - **On a closed model, veins stay off the underside it stands on:** skin facing more than 30° below level with less room below it than 5 % of the model's size, about the widest vein the presets grow. The room is measured straight down, to the bed (the model's lowest point) or to another piece of the model. No attractors go there, and roots and steps there are refused. A vein there would lift the model off the bed, or fill the gap to the part below and join the two in a print. Open sheets, which have no thickness to print with, aren't affected.
    - With Loops off, a refused step uses up the attractors it would have reached, since a vein or the wall already fills that space.
 3. **Add.** The step's new points go in together, so the result never depends on the order points are visited.
 
@@ -231,13 +233,13 @@ Measured on 2026-11-23 on this Mac (Apple M1 Max). In-app numbers come from the 
 | Organ vessels | Kidney, inside | 3,000 | 0.37 s | 5,745 | 4 | |
 | Tree | Tree, inside | 2,500, near the wall | 0.64 s | 4,967 | 5 | |
 | Coral | Sphere, inside | 4,000, random | 0.67 s | 12,292 | 0 | |
-| Surface vessels | Heart, surface | 3,000 | 0.71 s | 5,064 | 0 | |
+| Surface vessels | Heart, surface | 3,000 | 0.78 s | 4,960 | 4 | |
 | Lattice | Vase, surface | 2,500 | 1.46 s | 7,094 | 1 | 1,089 loops |
 | Roots round a pot | Pot, surface | 2,500 | 0.74 s | 5,629 | 2 | |
 | Inlet to outlet | Lens, inside, Join | 900, shared | 0.56 s | 3,427 | 6 | 467 joins, 311 dead ends trimmed |
 | Two interwoven | Lens, inside, Interweave | 3,000 each | 1.14 s | 9,982 | 234 of 6,000 | Closest gap 0.60 mm, as set |
 
-At the default Speed of 3 steps a frame, growth is held to the screen: about 170 steps a second (Coral grew 112 steps in 0.67 s, Surface vessels 123 in 0.71 s). Over six seeds, 1.1 left as many attractors as 1.0.0 on these models, give or take a few: 33 and 33 in all for Tree, 26 and 26 for Organ vessels, 10 and 12 for Surface vessels.
+At the default Speed of 3 steps a frame, growth is held to the screen: about 170 steps a second (Coral grew 112 steps in 0.67 s). Surface vessels was timed again for 1.1.1 on a busy machine; the others grow exactly as with 1.1.0. Over six seeds, 1.1.0 left as many attractors as 1.0.0 on these models, give or take a few: 33 and 33 in all for Tree, 26 and 26 for Organ vessels, 10 and 12 for Surface vessels.
 
 ### Gil's models
 
@@ -246,28 +248,28 @@ Gil's STL files, each opened in the app and grown with Organ vessels (inside) an
 | Model | Triangles | Size | Preparing to grow inside | Inside: vein points, attractors left | On the surface: vein points, attractors left |
 | --- | --- | --- | --- | --- | --- |
 | weave.stl, open | 1,752 | 90 × 90 × 90 mm | 2.0 s | 12,136, 22 of 3,000 | 5,843, 10 of 3,000 |
-| nih-brain.stl | 250,000 | 169 × 133 × 139 mm | 2.4 s | 8,975, 31 of 3,000 | 11,576, 326 of 3,000 |
-| ZuluTag_v3.stl | 3,002 | 47 × 7 × 29 mm | 0.7 s | 2,298, 590 of 3,000 | 6,371, 86 of 3,000 |
-| springpot.stl | 6,882 | 120 × 120 × 122 mm | 3.2 s | 486, 1,725 of 3,000 | 8,706, 781 of 3,000 (735 on the saucer, with no root) |
+| nih-brain.stl | 250,000 | 169 × 133 × 139 mm | 2.4 s | 8,975, 31 of 3,000 | 11,529, 375 of 3,000 |
+| ZuluTag_v3.stl | 3,002 | 47 × 7 × 29 mm | 0.7 s | 2,298, 590 of 3,000 | 6,130, 91 of 3,000 |
+| springpot.stl | 6,882 | 120 × 120 × 122 mm | 3.2 s | 486, 1,725 of 3,000 | 8,769, 648 of 3,000 (625 on the saucer, with no root) |
 | Untitled.stl, open | 181,364 | 28 × 33 × 4 mm | 0.7 s | No room for a root | 3, 2,994 of 3,000 |
 
-Preparing to grow inside includes placing the attractors. Preparing to grow on the surface took 0.5 s for the brain and 0.8 s for Untitled.stl. Growing took 0.70 s inside the brain and 0.83 s over it.
+Preparing to grow inside includes placing the attractors. Preparing to grow on the surface took 0.5 s for the brain and 0.8 s for Untitled.stl. Growing took 0.70 s inside the brain (measured with 1.1.0, which grows it the same).
 
-With 1.0.0, each attractor pulled only its nearest vein, even one across a wall or a fold that couldn't grow to it. These files left many more then:
+With 1.0.0, each attractor pulled only its nearest vein, even one across a wall or a fold that couldn't grow to it. These files left many more then. On the surface, 1.1.1 also keeps veins off the underside each closed model stands on:
 
-| Model | Inside: attractors left, 1.0.0 → 1.1 | On the surface: attractors left, 1.0.0 → 1.1 |
+| Model | Inside: attractors left, 1.0.0 → 1.1.1 | On the surface: attractors left, 1.0.0 → 1.1.1 |
 | --- | --- | --- |
 | weave.stl | 21 → 22 | 4 → 10 |
-| nih-brain.stl | 212 → 31 | 776 → 326 |
-| ZuluTag_v3.stl | 589 → 590 | 169 → 86 |
-| springpot.stl | 1,725 → 1,725 | 1,707 → 781, 735 of them on the saucer |
+| nih-brain.stl | 212 → 31 | 776 → 375 |
+| ZuluTag_v3.stl | 589 → 590 | 169 → 91 |
+| springpot.stl | 1,725 → 1,725 | 1,707 → 648, 625 of them on the saucer |
 
 Inside the brain, 1.1 left fewer with every seed tried: 212 → 31, 214 → 58, 216 → 42, 219 → 49, 220 → 43 and 230 → 41.
 
-- **Folds.** Inside the brain, the veins now reach into its folds and growth ends Done. Over its surface, 326 of 3,000 attractors are still left.
+- **Folds.** Inside the brain, the veins now reach into its folds and growth ends Done. Over its surface, 375 of 3,000 attractors are still left, and the base it rests on stays clear.
 - **Thin walls.** Inside fills only what is at least the edge clearance from the wall. The springpot's deepest point is 3.4 mm under its skin, so Inside grew 486 vein points and left 1,725 of 3,000 attractors, as before. The ZuluTag is the same: no vein can reach 590 of its attractors inside.
-- **Inside a pot.** Roots round a pot on the springpot now grow over the rim, down the pot's inside walls and over its floor. On the pot, 31 of its 1,870 attractors are left (945 with 1.0.0), and 395 vein points cover the inside floor (1 with 1.0.0).
-- **Separate parts.** The springpot's saucer is a separate piece of the STL. The pot's foot sits in it, and elsewhere a 1 mm gap separates them. Veins never cross from one piece to another, as a print would join them there. So all 630 of the saucer's attractors wait for a root of their own, and the status says so. (While 1.1 was being made, veins that reached the pot's foot stepped across the gap: 1,332 vein points on the saucer. 1.0.0 had put 26 there.)
+- **Inside a pot.** Roots round a pot on the springpot now grow over the rim, down the pot's inside walls and over its floor, but not over its bottom, which sits in the saucer. On the pot, 31 of its 1,977 attractors are left (945 of 1,870 with 1.0.0), and 433 vein points cover the inside floor (1 with 1.0.0).
+- **Separate parts.** The springpot's saucer is a separate piece of the STL. The pot's foot sits in it, and elsewhere a 1 mm gap separates them. Veins never cross from one piece to another, as a print would join them there. So all 523 of the saucer's attractors wait for a root of their own, and the status says so. (While 1.1 was being made, veins that reached the pot's foot stepped across the gap: 1,332 vein points on the saucer. 1.0.0 had put 26 there.)
 - **Crumpled sheets.** Untitled.stl is a ruffled sheet. Its deepest point is 0.22 mm under the skin, so it has no room inside. On its surface, the root sits 0.48 mm from the ruffled rim in a straight line, and with the 0.33 mm edge clearance growth stopped after 3 vein points. With Edge clearance at 0, the app's engine grew 2,569 vein points there (measured in Node), leaving 1,238 of 3,000 attractors.
 
 ### Exports
@@ -278,14 +280,30 @@ The five designer jobs, each grown and exported at Normal detail through the Exp
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Vessels inside an organ | nih-brain.stl | Organ vessels | 8,975, 31 of 3,000 | STL | 1,468,668 | 73.4 MB | 4.6 s |
 | | | | | 3MF | 1,468,668 | 17.2 MB | 5.6 s |
-| Vessels over a heart | Heart | Surface vessels | 5,064, 0 | 3MF with the model | 1,089,348 | 12.5 MB | 4.2 s |
-| | | | | STL, veins alone | 1,039,484 | 52.0 MB | 4.3 s |
+| Vessels over a heart | Heart | Surface vessels | 4,960, 4 | 3MF with the model | 1,082,856 | 12.4 MB | 4.8 s |
+| | | | | STL, veins alone | 1,032,992 | 51.6 MB | 5.1 s |
 | A lamp shade lattice | Vase | Lattice | 7,094, 1 (1,089 loops) | STL | 1,493,248 | 74.7 MB | 5.6 s |
 | | | | | OBJ centre lines | 7,094 points | 0.3 MB | |
-| Roots round a pot | springpot.stl | Roots round a pot | 10,689, 661 of 2,500 (630 on the saucer, with no root) | 3MF with the model | 1,989,030 | 22.8 MB | 7.1 s |
+| Roots round a pot | springpot.stl | Roots round a pot | 10,911, 554 of 2,500 (523 on the saucer, with no root) | 3MF with the model | 1,968,242 | 22.6 MB | 8.1 s |
 | A tree to print | Tree | Tree | 4,967, 5 | STL | 780,940 | 39.0 MB | 3.2 s |
 
-Every file came out watertight by the app's own check. The four STLs were read back and welded again, as a slicer does: none has an open edge, and each is one connected piece. The pot's 3MF is 22.8 MB, not 16.5 MB as with 1.0.0, as the veins now cover the pot inside and out.
+Every file came out watertight by the app's own check. The four STLs were read back and welded again, as a slicer does: none has an open edge, and each is one connected piece. The pot's 3MF is 22.6 MB, not 16.5 MB as with 1.0.0, as the veins now cover the pot inside and out. The heart's and the pot's files were made again for 1.1.1 on a busy machine, which slowed the unchanged exports by 10 to 40 %, so their times are high.
+
+**Sliced for a printer.** Each file as the app exported it, in Bambu Studio for a Bambu A1 mini (180 mm bed): PLA, 0.4 mm nozzle, 0.2 mm layers, 15 % infill, 2 walls, tree supports. None has been printed yet.
+
+| Job | File | Print time | PLA | Time spent on supports | Slicer warnings |
+| --- | --- | --- | --- | --- | --- |
+| Vessels inside an organ | STL | 18 h 48 min | 230 g | 42 % | None |
+| Vessels over a heart | 3MF with the model | 2 h 40 min | 72 g | 4 % | None |
+| | STL, veins alone | 5 h 0 min | 54 g | 44 % | None |
+| A lamp shade lattice | STL | 8 h 4 min | 105 g | 16 % | None |
+| Roots round a pot | 3MF with the model | 8 h 35 min | 136 g | 4 % | None |
+| A tree to print | STL | 5 h 51 min | 71 g | 20 % | None |
+
+- Everything fits the 180 mm bed; the organ's vessels print between 14 and 168 mm.
+- With 1.1.0, the pot had 12 overhangs the slicer couldn't support: roots had grown over the pot's bottom, in the 1 mm gap above its saucer. 1.1.1 keeps veins off the underside a model stands on, and the warning is gone.
+- The organ's vessels and the heart's veins alone spend 42 to 44 % of their time on supports, much of it inside the network, which will be hard to remove. The heart with raised veins is the easiest print.
+- Even without veins, the springpot's STL puts its pot 1 mm above its saucer, and a slicer fills that gap with supports: print the two apart.
 
 ### Growth at larger counts
 
@@ -300,7 +318,7 @@ The app's engine in Node, as the worker runs it, at up to the most attractors th
 | | 20,000 | 0.15 s | 122 | 8,163 | 0 | 0.47 s | 3.9 ms |
 | | 60,000 | 0.51 s | 122 | 10,080 | 0 | 1.49 s | 12.2 ms |
 
-Preparing the kidney's inside took 0.8 s. At 3,000 attractors the engine grows exactly what the app does: 5,745 and 5,064 vein points. A step takes up to 15 % longer than with 1.0.0 here. In the folded brain a step inside takes 5.8 ms on average, against 2.1 ms with 1.0.0, and the slowest 16 ms; testing every vein, with no limit, took 52 ms on average and 180 ms at worst.
+Preparing the kidney's inside took 0.8 s. At 3,000 attractors the engine grows exactly what the app does: 5,745 and 5,064 vein points. Measured with 1.1.0; 1.1.1 keeps veins off the heart's base and grows it with 4,960 vein points. A step takes up to 15 % longer than with 1.0.0 here. In the folded brain a step inside takes 5.8 ms on average, against 2.1 ms with 1.0.0, and the slowest 16 ms; testing every vein, with no limit, took 52 ms on average and 180 ms at worst.
 
 ### Other limits
 
@@ -309,7 +327,7 @@ Preparing the kidney's inside took 0.8 s. At 3,000 attractors the engine grows e
 - **Veins never cross between separate pieces of a model.** Give each piece its own root; the status says when attractors are left on a piece without one.
 - **The design isn't kept in the browser between visits.** Save a project to keep it. Closing or reloading the page with unsaved veins asks first.
 - **Interwoven systems are narrowed apart only when growth pauses,** so the closest gap shows then. Exports always use the veins as they are once growth has stopped.
-- **Tested in Chrome on a Mac.** Safari, Firefox and touch devices haven't been tried yet, and no export has been sliced or printed yet.
+- **Tested in Chrome on a Mac.** Safari, Firefox and touch devices haven't been tried yet. The designer jobs have been sliced (see [Exports](#exports)), but none has been printed yet.
 
 ## Development
 
