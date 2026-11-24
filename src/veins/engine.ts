@@ -296,9 +296,11 @@ export class Engine {
       this.grid = new PointGrid(Math.max(1e-6, 2.5 * params.segment), this.domain.centre)
       for (let i = 0; i < this.xs.length; i++) if (!this.fixedFlag.data[i]) this.grid.add(i, this.xs.data[i], this.ys.data[i], this.zs.data[i])
     }
-    // Which vein points see an attractor depends on the clearance (inside), and only those within reach count: work
-    // them out again when either changes.
-    const resee = params.clearance !== this.params.clearance || reach2(params) !== reach2(this.params) || params.kill !== this.params.kill
+    // Which vein points see an attractor depends on the clearance inside (sight lines keep it from the wall; on the
+    // surface sight is the normals alone), and only those within reach, and inside within a kill distance of the nearest,
+    // count: work them out again only when one of those changes, as a slider sends a change for each tick.
+    const resee = (this.domain.kind === 'inside' && params.clearance !== this.params.clearance) || reach2(params) !== reach2(this.params)
+      || (Number.isFinite(this.domain.seeBeyond) && params.kill !== this.params.kill)
     // The number of systems and how they couple are fixed for an engine; they change by starting again.
     this.params = { ...params, systems: this.params.systems, coupling: this.params.coupling }
     if (resee) this.seeAgain()
@@ -417,6 +419,8 @@ export class Engine {
   // the first that sees it is the nearest that does; where it is quick, depth first, as the nearest point is found.
   // `skip` is a point already known not to.
   private seek(tree: PointTree, s: number, e: number, skip: number, lim: number) {
+    // On a piece of the model where this tree has no vein, nothing can see the attractor: don't look.
+    if (this.pieced && !this.grownOn.has(this.aregion[s] * this.T + (e - s * this.T))) return
     const had = this.seen[e] >= 0, cap = had ? this.seenD2[e] : lim, below = had ? this.seen[e] : -1
     this.seekS = s; this.seekE = e; this.seekSkip = skip
     if (!this.domain.quickSight) { tree.ordered(this.ax[s], this.ay[s], this.az[s], cap, below, this.seekVisit); return }

@@ -39,18 +39,23 @@ function firstDesign(): { design: Design; saved: boolean } {
   return { design: { ...base, roots: defaultRequests(base) }, saved: true }
 }
 
-const DONE_TEXT: Record<string, (left: number, total: number, rootless: number) => string> = {
+// Attractors on a separate piece of the model with no root (of their own system, with two or three): veins never cross
+// from one piece to another, so only a root there reaches them.
+const rootlessText = (left: number, rootless: number, several: boolean) =>
+  `Stopped: ${rootless >= left ? `all ${count(left)}` : `${count(rootless)} of the ${count(left)}`} attractors left ${rootless === 1 && left > 1 ? 'is' : 'are'} on a part of the model with no root${several ? ' of their system' : ''}. Click it with the Roots tool (O) to grow there too.`
+
+const DONE_TEXT: Record<string, (left: number, total: number, rootless: number, several: boolean) => string> = {
   reached: () => 'Done: every attractor is reached.',
-  // Attractors on a separate piece of the model with no root: veins never cross from one piece to another. A few left
-  // over is normal: no vein has a clear path to them. Most left over means the veins had no room.
-  stalled: (left, total, rootless) => rootless > 0
-    ? `Stopped: ${rootless >= left ? `all ${count(left)}` : `${count(rootless)} of the ${count(left)}`} attractors left are on a part of the model with no root. Click it with the Roots tool (O) to grow there too.`
+  // A few left over is normal: no vein has a clear path to them. Most left over means the veins had no room.
+  stalled: (left, total, rootless, several) => rootless > 0
+    ? rootlessText(left, rootless, several)
     : left <= Math.max(3, 0.02 * total)
     ? `Done: all but ${count(left)} of ${count(total)} attractors are reached; no vein has a clear path to the rest.`
     : left > 0.5 * total
       ? `Stopped early: ${count(left)} of ${count(total)} attractors can’t be reached. The model may be too thin, or the roots boxed in: try a smaller edge clearance or segment, another root, or the other mode.`
       : `Stopped: ${count(left)} of ${count(total)} attractors can’t be reached from here. A longer segment, a shorter kill distance or another root may help.`,
-  'out-of-reach': (left, total) => `Stopped: ${count(left)} of ${count(total)} attractors are beyond the attraction distance. Raise it, or set it to 0 for no limit.`,
+  'out-of-reach': (left, total, rootless, several) => rootless > 0 ? rootlessText(left, rootless, several)
+    : `Stopped: ${count(left)} of ${count(total)} attractors are beyond the attraction distance. Raise it, or set it to 0 for no limit.`,
   cap: () => 'Stopped at the limit of 400,000 vein points. Use fewer attractors or a longer segment.',
   empty: () => 'No roots yet: click the model with the Roots tool (O) to add one.',
 }
@@ -321,11 +326,11 @@ export function App() {
   }, [atRisk])
 
   const counts = `${count(stats.points)} vein ${stats.points === 1 ? 'point' : 'points'} · ${count(stats.live)} ${stats.live === 1 ? 'attractor' : 'attractors'} left · step ${count(stats.step)}`
-  const doneText = stats.done ? DONE_TEXT[stats.done](stats.live, attractorCount, stats.rootless) : ''
+  const doneText = stats.done ? DONE_TEXT[stats.done](stats.live, attractorCount, stats.rootless, s.systems > 1) : ''
   const statusText = status?.text ?? (model.stopping ? 'Stopping after the current step…'
     : running ? `Growing · ${counts}` : !model.ready ? 'Preparing the model…' : model.placingRoots ? 'Placing the roots…'
       : missingText ? missingText
-        : doneText ? (stats.done === 'reached' ? `${doneText} ${counts}${joining(s) ? ` · ${count(net.links.length / 2)} joins` : ''}` : doneText) : roots ? `Ready: press Grow. ${counts}` : DONE_TEXT.empty(0, 0, 0))
+        : doneText ? (stats.done === 'reached' ? `${doneText} ${counts}${joining(s) ? ` · ${count(net.links.length / 2)} joins` : ''}` : doneText) : roots ? `Ready: press Grow. ${counts}` : DONE_TEXT.empty(0, 0, 0, false))
 
   return <main className="studio">
     <TooltipLayer />

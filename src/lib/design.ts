@@ -82,7 +82,7 @@ export function rootRequests(mesh: MeshData, rule: RootRule, mode: Mode, systems
       default: spots.push([c[0] + off, c[1], lo[2]])
     }
   }
-  return spots.map((target, t) => ({ kind: 'skin', ...skinPoint(mesh, target, normals), system: t }))
+  return spots.map((target, t) => ({ kind: 'skin', ...skinPoint(mesh, target, normals), system: t, near: true }))
 }
 
 // A model's first roots: a built-in model's own spots, or for a model you opened, wherever the worker finds it suits

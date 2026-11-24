@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.1.2 2026-11-23
+
+Fixes from QA and an independent code review.
+
+- **The Sphere and the Tree start with a root On the surface again.** Their own spot is at the bottom, which 1.1.1 keeps veins off, so the app refused the root it had placed itself, and they started with none. A model's own spot on the underside now moves to the nearest skin where veins can start. A click there with the Roots tool is still refused, with the reason.
+- **After Undo, Redo or opening a project, the status says again how many attractors are on a part with no root,** and Inlet to outlet's dead-end count comes back too. Before, both were lost until growth ran again.
+- **Models whose triangles face inward get the right underside.** Before, the bottom of such a model got veins and its top was kept clear.
+- **A hole or a stray triangle no longer turns the underside rule off for the whole model.** It is worked out for each closed piece, and a piece with a small hole or a missing triangle or two still counts as closed.
+- **On a closed model, veins keep the edge clearance from the bed,** so tubes along the bottom of a wall no longer reach below it (by up to 0.4 mm before).
+- **The underside is half as deep:** the room it needs below is the widest vein's radius, 2.5 % of the model's size, not its width. The kidney and the lens kept 14 % of their skin clear; now 7.4 % and 7.6 %. Over the heart, every attractor is reached again.
+- **Veins also stay off a closed model's side where it is too close above the bed or another part,** measured below each spot a vein lands on: on the springpot, the pot's side just above its saucer's floor. All six designer prints now slice for a Bambu A1 mini with no warnings.
+- **Faster with separate parts and sliders.** A springpot with 60,000 attractors reopened (Undo, Redo, opening a project) in 5 to 7 s; now in under half a second. Each tick of the Kill or Attraction distance slider took up to 4 s there; now a kill change takes no time on the surface, an attraction change about 50 ms, and the worker takes only the latest tick of a moving slider.
+- **Messages:** with two or three systems, the status says "no root of their system". When growth stops beyond the attraction distance with attractors on a part with no root, it says so instead of telling you to raise the distance.
+- **Project files remember which roots are the model's own spots,** so they are placed the same way after you reopen a project and press Reset.
+
 ## 1.1.1 2026-11-23
 
 Prints sit flat.

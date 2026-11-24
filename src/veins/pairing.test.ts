@@ -107,4 +107,32 @@ describe('pairing with the nearest vein that sees an attractor', () => {
     expect(Array.from(b.x)).toEqual(Array.from(a.x))
     expect(Array.from(b.used)).toEqual(Array.from(a.used))
   })
+
+  it('carries on bit for bit after the attraction or kill distance changes, as reopening with it would', () => {
+    // Both decide how far the vein that sees an attractor may be: an attraction distance shorter than the kill distance
+    // still lets a vein within the kill distance use an attractor up.
+    const inside = scatterInside(dom, { count: 900, placement: 'even', seed: 8, clearance: 0.5, shell: 3 })
+    for (const patch of [{ attraction: 6 }, { attraction: 1.5 }, { kill: 3 }, { attraction: 6, kill: 1.2 }]) {
+      const a = new Engine(dom, { p: inside.p, n: null }, params, { roots: [{ at: [armA, 38, 0] }, { at: [armB, 30, 0] }] })
+      for (let s = 0; s < 20; s++) a.stepOnce()
+      a.setParams({ ...params, ...patch })
+      const b = new Engine(dom, { p: inside.p, n: null }, { ...params, ...patch }, { state: a.snapshot() })
+      grow(a); grow(b)
+      expect(b.points).toBeGreaterThan(40)
+      expect(Array.from(b.x)).toEqual(Array.from(a.x))
+      expect(Array.from(b.used)).toEqual(Array.from(a.used))
+    }
+    // On the surface with no attraction distance, the kill distance changes nothing the caches hold, so they aren't
+    // searched again: the result must still be what reopening with it gives.
+    const sheet = new SurfaceDomain(vase())
+    const placed = scatterSurface(sheet, { count: 1500, placement: 'even', seed: 4, clearance: 1 })
+    const onSkin = { ...params, clearance: 1 }
+    const a = new Engine(sheet, placed, onSkin, { roots: sheet.rimRoots(4, 2) })
+    for (let s = 0; s < 30; s++) a.stepOnce()
+    a.setParams({ ...onSkin, kill: 1.2 })
+    const b = new Engine(sheet, placed, { ...onSkin, kill: 1.2 }, { state: a.snapshot() })
+    grow(a); grow(b)
+    expect(Array.from(b.x)).toEqual(Array.from(a.x))
+    expect(Array.from(b.used)).toEqual(Array.from(a.used))
+  })
 })

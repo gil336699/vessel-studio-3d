@@ -118,6 +118,10 @@ describe('review fixes', () => {
     const both: MeshData = { positions: Float32Array.from([...cube.positions, ...P]), indices: Uint32Array.from([...cube.indices, ...Array.from(plate.indices, q => q + n)]) }
     const dom = new SurfaceDomain(both)
     expect(dom.regions).toBe(2)
+    // The box's side just above the plate leaves no room for a vein's tube (1.5 mm, 2.5 % of the 60 mm model); higher up
+    // it does. Found by slicing: roots on the springpot's side above its saucer's floor couldn't be supported.
+    expect(dom.onUnderside(20, 5, -19.8)).toBe(true)
+    expect(dom.onUnderside(20, 5, -15)).toBe(false)
     const placed = scatterSurface(dom, { count: 1500, placement: 'even', seed: 2, clearance: 0 })
     const e = new Engine(dom, placed, params, { roots: [dom.root([0, 0, 20], 0)!] })
     for (let s = 0; s < 3000 && e.stepOnce() && !e.done; s++) { /* grow */ }
@@ -130,6 +134,38 @@ describe('review fixes', () => {
     // The status can say they need a root of their own.
     expect(onPlate).toBeGreaterThan(300)
     expect(e.rootless()).toBe(onPlate)
+  })
+
+  it('finds the underside of a model whose triangles face inward, a box with a stray triangle, and one with a hole', () => {
+    // Found by the independent review of 1.1.1: the rule read each triangle's normal as outward, so on a box wound
+    // inward its bottom got veins and its top was kept clear; and a single open edge anywhere turned the rule off.
+    const outward = box()
+    const n = outward.positions.length / 3
+    const stray: MeshData = { positions: Float32Array.from([...outward.positions, 60, 0, 0, 61, 0, 0, 60, 1, 0]), indices: Uint32Array.from([...outward.indices, n, n + 1, n + 2]) }
+    const holed: MeshData = { positions: outward.positions, indices: outward.indices.slice(3) }
+    for (const [name, mesh] of [['inward', flip(outward)], ['stray triangle', stray], ['hole', holed]] as const) {
+      const dom = new SurfaceDomain(mesh)
+      expect([name, dom.onUnderside(5, 5, -20)]).toEqual([name, true])
+      expect([name, dom.onUnderside(5, 5, 20)]).toEqual([name, false])
+    }
+    // An open sheet still has no underside: the vase is open at its mouth.
+    const sheet = new SurfaceDomain(vase())
+    expect(sheet.underside.some(u => u === 1)).toBe(false)
+  })
+
+  it('keeps surface veins the edge clearance above the bed on a closed model, so their tubes don’t reach below it', () => {
+    // Found by the independent review of 1.1.1: veins ran along the bottom edges of a box's sides, and their tubes
+    // reached 0.4 mm below the bed, lifting the model as veins on its bottom did.
+    const dom = new SurfaceDomain(box())
+    const clear = { ...params, clearance: 1 }
+    const placed = scatterSurface(dom, { count: 1200, placement: 'even', seed: 1, clearance: 1 })
+    for (let a = 0; a < placed.p.length / 3; a++) expect(placed.p[a * 3 + 2]).toBeGreaterThanOrEqual(-19)
+    const e = new Engine(dom, placed, clear, { roots: [dom.root([0, 0, 20], 1)!] })
+    for (let s = 0; s < 3000 && e.stepOnce() && !e.done; s++) { /* grow */ }
+    expect(e.points).toBeGreaterThan(300)
+    expect(Math.min(...e.z)).toBeGreaterThanOrEqual(-19)
+    expect(dom.root([20, 5, -19.5], 1)).toBeNull()
+    expect(dom.nearBed(20, 5, -19.5, 1)).toBe(true)
   })
 
   it('grows surface veins round a box’s sharp edges, down its sides, and off the bottom it stands on', () => {
@@ -152,7 +188,8 @@ describe('review fixes', () => {
     expect(attractorsOnBottom).toBe(0)
     expect(dom.root([5, 5, -20], 0)).toBeNull()
     expect(dom.onUnderside(5, 5, -20)).toBe(true)
-    // Its sides, down to the bottom edge, are not the underside.
-    expect(dom.onUnderside(20, 5, -19.5)).toBe(false)
+    // Its sides are open down to the room a vein's tube needs above the bed: 1 mm, 2.5 % of the 40 mm box.
+    expect(dom.onUnderside(20, 5, -18.5)).toBe(false)
+    expect(dom.onUnderside(20, 5, -19.5)).toBe(true)
   })
 })

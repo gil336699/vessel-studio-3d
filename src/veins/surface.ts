@@ -7,9 +7,11 @@
 // than the edge clearance. An attractor pulls only veins on its own piece whose normal doesn't face away from its own,
 // so veins never pair across a thin wall, a narrow gap or a gap between pieces.
 //
-// On a closed model, veins also stay off the underside it stands on: skin facing down with too little room below it,
-// down to the bed or to another piece of the model. No attractors go there, and steps and roots there are refused. A
-// vein on a pot's bottom would lift it off the bed, or fill the gap to its saucer and join the two in a print.
+// On each closed piece of a model, veins also stay off the underside it stands on: skin facing down with too little
+// room below it, down to the bed or to another piece of the model. They keep the edge clearance from the bed too, so
+// their tubes don't reach below it. No attractors go there, and steps and roots there are refused. A vein on a pot's
+// bottom would lift it off the bed, or fill the gap to its saucer and join the two in a print. A piece counts as closed
+// with a small hole or two; its triangles may face in or out, as its signed volume tells.
 import { BufferAttribute, BufferGeometry, DoubleSide, Ray, Vector3 } from 'three'
 import { MeshBVH, type HitPointInfo } from 'three-mesh-bvh'
 import { meshBounds, openEdges, rimLoops, type MeshData, type Vec3 } from '../lib/mesh'
@@ -24,10 +26,15 @@ const SIGHT = -0.5
 const JOIN = 0.2
 // Faces within this angle share their normals at a corner; sharper edges, such as a box's, keep each face's own.
 const CREASE = Math.cos(Math.PI / 3)
-// The underside: triangles facing more than 30° below level, with less room below them than this share of the model's
-// longest side, about as much as the widest vein the presets grow (5 % of the model's size).
-const UNDERSIDE = -0.5
-const BASE_ROOM = 0.05
+// The underside: triangles that don't face more than 30° above level, so a vein's tube on them hangs below its centre
+// line, with less room below them than this share of the model's longest side: the radius of the widest vein the
+// presets grow (5 % of the model's size wide).
+const HANGS = 0.5
+const BASE_ROOM = 0.025
+// A piece counts as closed when its open edges add up to less than this share of the square root of its area, or are at
+// most MISSING_EDGES in number: a small hole, or a missing triangle or two however long, not the mouth of a vase.
+const SMALL_HOLES = 0.5
+const MISSING_EDGES = 6
 
 export class SurfaceDomain implements Domain {
   readonly kind = 'surface'
@@ -58,8 +65,19 @@ export class SurfaceDomain implements Domain {
   // stays on the piece it starts on: one that crossed the gap between two would join them in a print.
   readonly regions: number
   private faceRegion: Int32Array | null
-  // 1 for each triangle on the underside a closed model stands on, which veins stay off.
+  // 1 for each triangle on the underside a closed piece stands on, which veins stay off, and for each triangle of a
+  // closed piece, which keeps the edge clearance from the bed (the model's lowest point).
   readonly underside: Uint8Array
+  private solid: Uint8Array
+  readonly bottom: number
+  // For each triangle of a closed piece that doesn't face well up, 1: a point on it needs the room below it for a vein's
+  // tube, as a large triangle's middle can sit higher than the low end of a wall.
+  private hangs: Uint8Array
+  private facePiece: Int32Array
+  private pieceOut: Float64Array
+  private room: number
+  private several: boolean
+  private down = new Ray(new Vector3(), new Vector3(0, 0, -1))
 
   constructor(mesh: MeshData) {
     const geometry = new BufferGeometry()
@@ -126,7 +144,17 @@ export class SurfaceDomain implements Domain {
     this.regions = parts.count
     this.faceRegion = parts.count > 1 ? parts.face : null
     const size = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2])
-    this.underside = edges.length ? new Uint8Array(faces) : undersideFaces(P, I, FN, this.bvh, this.faceRegion, lo[2], BASE_ROOM * size)
+    const shapes = pieceShapes(P, I, parts.face, parts.count, this.faceArea, edges)
+    this.solid = new Uint8Array(faces)
+    for (let f = 0; f < faces; f++) this.solid[f] = shapes.closed[parts.face[f]]
+    this.bottom = lo[2]
+    this.underside = undersideFaces(P, I, FN, this.bvh, parts.face, shapes, parts.count > 1, lo[2], BASE_ROOM * size)
+    this.hangs = new Uint8Array(faces)
+    for (let f = 0; f < faces; f++) { const k = parts.face[f]; this.hangs[f] = shapes.closed[k] && FN[f * 3 + 2] * shapes.out[k] < HANGS ? 1 : 0 }
+    this.facePiece = parts.face
+    this.pieceOut = shapes.out
+    this.room = BASE_ROOM * size
+    this.several = parts.count > 1
     this.rimCell = Math.max(longest, this.span / 200, 1e-6)
     this.rimGrid = new Map()
     for (let s = 0; s < this.rimSegments.length / 6; s++) {
@@ -139,9 +167,52 @@ export class SurfaceDomain implements Domain {
 
   get open() { return this.rimSegments.length > 0 }
 
-  // Whether the skin nearest a point is on the underside the model stands on.
+  // Whether the skin nearest a point is on the underside the model stands on, or too close above the bed or a part
+  // below it for a vein's tube.
   onUnderside(x: number, y: number, z: number): boolean {
-    return this.snap(x, y, z, this.probed) && this.underside[this.hit.faceIndex] === 1
+    if (!this.snap(x, y, z, this.probed)) return false
+    const f = this.hit.faceIndex, q = this.probed
+    return this.underside[f] === 1 || this.cramped(f, q[0], q[1], q[2], q[3], q[4], q[5])
+  }
+
+  // Whether a point on triangle f (normal n there) has too little room below it for a vein's tube: on a closed piece,
+  // skin that doesn't face well up, less than the room above the bed, or above another piece straight below. The look
+  // down starts a hair outside the skin, so it doesn't graze the piece's own edge.
+  private cramped(f: number, x: number, y: number, z: number, nx: number, ny: number, nz: number): boolean {
+    if (!this.hangs[f]) return false
+    if (z - this.bottom < this.room) return true
+    if (!this.several) return false
+    const o = this.pieceOut[this.facePiece[f]] * 0.02 * this.room
+    this.down.origin.set(x + nx * o, y + ny * o, z + nz * o)
+    const hit = this.bvh.raycastFirst(this.down, DoubleSide, 0, this.room)
+    return !!hit && hit.faceIndex !== undefined && hit.faceIndex !== null && this.facePiece[hit.faceIndex] !== this.facePiece[f]
+  }
+  isCramped(f: number, x: number, y: number, z: number, nx: number, ny: number, nz: number) { return this.cramped(f, x, y, z, nx, ny, nz) }
+
+  // Whether a triangle of a closed piece, at height z, is nearer the bed than the clearance.
+  private byBed(f: number, z: number, clear: number) { return clear > 0 && this.solid[f] === 1 && z - this.bottom < clear }
+  isByBed(f: number, z: number, clear: number) { return this.byBed(f, z, clear) }
+
+  // Whether the skin nearest a point is nearer the bed than the clearance, on a closed piece.
+  nearBed(x: number, y: number, z: number, clear: number): boolean {
+    return this.snap(x, y, z, this.probed) && this.byBed(this.hit.faceIndex, this.probed[2], clear)
+  }
+
+  // The middle of the triangle nearest `point` where veins may grow: not on the underside, nor nearer the bed than the
+  // clearance. Where a model's own root asked for there goes. Null when there is no such triangle.
+  nearestAllowed(point: Vec3, clear: number): Vec3 | null {
+    const P = this.positions, I = this.indices
+    let best = Infinity, at: Vec3 | null = null
+    for (let f = 0; f < this.underside.length; f++) {
+      if (this.underside[f]) continue
+      const a = I[f * 3] * 3, b = I[f * 3 + 1] * 3, c = I[f * 3 + 2] * 3
+      const x = (P[a] + P[b] + P[c]) / 3, y = (P[a + 1] + P[b + 1] + P[c + 1]) / 3, z = (P[a + 2] + P[b + 2] + P[c + 2]) / 3
+      const N = this.cornerNormals, o = f * 9
+      if (this.byBed(f, z, clear) || this.cramped(f, x, y, z, (N[o] + N[o + 3] + N[o + 6]) / 3, (N[o + 1] + N[o + 4] + N[o + 7]) / 3, (N[o + 2] + N[o + 5] + N[o + 8]) / 3)) continue
+      const d2 = (x - point[0]) ** 2 + (y - point[1]) ** 2 + (z - point[2]) ** 2
+      if (d2 < best) { best = d2; at = [x, y, z] }
+    }
+    return at
   }
 
   // The piece of the model a point on it is on, from 0.
@@ -252,8 +323,8 @@ export class SurfaceDomain implements Domain {
       if (!(d > 0.25 * length)) return false
     } else this.snap(x, y, z, s, length)
     const landed = this.hit.faceIndex
-    // On the underside the model stands on.
-    if (this.underside[landed]) return false
+    // On the underside the model stands on, or nearer the bed than the clearance.
+    if (this.underside[landed] || this.byBed(landed, s[2], clear) || this.cramped(landed, s[0], s[1], s[2], s[3], s[4], s[5])) return false
     // Landed on another piece: it jumped the gap between them.
     if (this.faceRegion && this.faceRegion[landed] !== (region >= 0 ? region : this.region(px, py, pz))) return false
     if (s[3] * pnx + s[4] * pny + s[5] * pnz < STEP_TURN && folds === 0) return false
@@ -273,11 +344,13 @@ export class SurfaceDomain implements Domain {
     return !(clear > 0) || this.rimDistance(ax, ay, az, clear) >= clear
   }
 
-  // A root for a click on the skin, snapped onto it, with its normal. Null when it is nearer a rim than the clearance.
+  // A root for a click on the skin, snapped onto it, with its normal. Null when it is nearer a rim or the bed than the
+  // clearance, or on the underside the model stands on.
   root(point: Vec3, clearance: number): { at: Vec3; normal: Vec3 } | null {
     const s = new Float64Array(6)
     if (!this.snap(point[0], point[1], point[2], s)) return null
-    if (this.underside[this.hit.faceIndex]) return null
+    const f = this.hit.faceIndex
+    if (this.underside[f] || this.byBed(f, s[2], clearance) || this.cramped(f, s[0], s[1], s[2], s[3], s[4], s[5])) return null
     if (clearance > 0 && this.rimDistance(s[0], s[1], s[2], clearance) < clearance) return null
     return { at: [s[0], s[1], s[2]], normal: [s[3], s[4], s[5]] }
   }
@@ -416,23 +489,62 @@ export class SurfaceDomain implements Domain {
   }
 }
 
-// Triangles on the underside a closed model stands on: facing down, with less than `room` below them, down to the bed
-// (the model's lowest point, `bottom`) or to another piece of the model straight below. The same piece below, as under
-// a fold, doesn't count: a vein there only joins the model to itself.
-function undersideFaces(P: Float32Array, I: Uint32Array, FN: Float64Array, bvh: MeshBVH, faceRegion: Int32Array | null, bottom: number, room: number): Uint8Array {
-  const faces = I.length / 3, out = new Uint8Array(faces)
+// Each piece of the model: whether it counts as closed (its open edges add up to less than SMALL_HOLES of the square root
+// of its area), and which way its triangles face (+1 out, -1 in), by its signed volume about its own middle.
+function pieceShapes(P: Float32Array, I: Uint32Array, piece: Int32Array, count: number, faceArea: Float64Array, edges: ArrayLike<number>) {
+  const area = new Float64Array(count), mx = new Float64Array(count), my = new Float64Array(count), mz = new Float64Array(count)
+  const faces = I.length / 3
+  for (let f = 0; f < faces; f++) {
+    const k = piece[f], w = faceArea[f]
+    const a = I[f * 3] * 3, b = I[f * 3 + 1] * 3, c = I[f * 3 + 2] * 3
+    area[k] += w
+    mx[k] += w * (P[a] + P[b] + P[c]) / 3; my[k] += w * (P[a + 1] + P[b + 1] + P[c + 1]) / 3; mz[k] += w * (P[a + 2] + P[b + 2] + P[c + 2]) / 3
+  }
+  const volume = new Float64Array(count)
+  for (let f = 0; f < faces; f++) {
+    const k = piece[f], w = area[k] || 1, ox = mx[k] / w, oy = my[k] / w, oz = mz[k] / w
+    const a = I[f * 3] * 3, b = I[f * 3 + 1] * 3, c = I[f * 3 + 2] * 3
+    const ax = P[a] - ox, ay = P[a + 1] - oy, az = P[a + 2] - oz, bx = P[b] - ox, by = P[b + 1] - oy, bz = P[b + 2] - oz
+    const cx = P[c] - ox, cy = P[c + 1] - oy, cz = P[c + 2] - oz
+    volume[k] += (ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx)) / 6
+  }
+  // Open edges, each counted for the piece of its first corner.
+  const pieceOf = new Int32Array(P.length / 3)
+  for (let f = 0; f < faces; f++) for (let j = 0; j < 3; j++) pieceOf[I[f * 3 + j]] = piece[f]
+  const open = new Float64Array(count), openCount = new Int32Array(count)
+  for (let e = 0; e + 1 < edges.length; e += 2) {
+    const a = edges[e] * 3, b = edges[e + 1] * 3
+    open[pieceOf[edges[e]]] += Math.hypot(P[b] - P[a], P[b + 1] - P[a + 1], P[b + 2] - P[a + 2])
+    openCount[pieceOf[edges[e]]]++
+  }
+  const closed = new Uint8Array(count), out = new Float64Array(count)
+  for (let k = 0; k < count; k++) {
+    closed[k] = (open[k] < SMALL_HOLES * Math.sqrt(area[k]) || openCount[k] <= MISSING_EDGES) && volume[k] !== 0 ? 1 : 0
+    out[k] = volume[k] < 0 ? -1 : 1
+  }
+  return { closed, out }
+}
+
+// Triangles on the underside a closed piece stands on: facing down or sideways (outward, whichever way the piece's
+// triangles are wound), with less than `room` below them, down to the bed (the model's lowest point, `bottom`) or to
+// another piece of the model straight below: a pot's bottom, and its side just above the floor of its saucer. The same
+// piece below, as under a fold, doesn't count: a vein there only joins the model to itself.
+function undersideFaces(P: Float32Array, I: Uint32Array, FN: Float64Array, bvh: MeshBVH, piece: Int32Array, shapes: { closed: Uint8Array; out: Float64Array },
+  several: boolean, bottom: number, room: number): Uint8Array {
+  const faces = I.length / 3, result = new Uint8Array(faces)
   const ray = new Ray(new Vector3(), new Vector3(0, 0, -1))
   for (let f = 0; f < faces; f++) {
-    if (!(FN[f * 3 + 2] < UNDERSIDE)) continue
+    const k = piece[f]
+    if (!shapes.closed[k] || !(FN[f * 3 + 2] * shapes.out[k] < HANGS)) continue
     const a = I[f * 3] * 3, b = I[f * 3 + 1] * 3, c = I[f * 3 + 2] * 3
     const cx = (P[a] + P[b] + P[c]) / 3, cy = (P[a + 1] + P[b + 1] + P[c + 1]) / 3, cz = (P[a + 2] + P[b + 2] + P[c + 2]) / 3
-    if (cz - bottom < room) { out[f] = 1; continue }
-    if (!faceRegion) continue
+    if (cz - bottom < room) { result[f] = 1; continue }
+    if (!several) continue
     ray.origin.set(cx, cy, cz)
     const hit = bvh.raycastFirst(ray, DoubleSide, 1e-4 * room, room)
-    if (hit && hit.faceIndex !== undefined && hit.faceIndex !== null && faceRegion[hit.faceIndex] !== faceRegion[f]) out[f] = 1
+    if (hit && hit.faceIndex !== undefined && hit.faceIndex !== null && piece[hit.faceIndex] !== k) result[f] = 1
   }
-  return out
+  return result
 }
 
 // Each triangle's piece of the model, by triangles that share corners, and how many pieces there are.
@@ -521,6 +633,7 @@ export function scatterSurface(dom: SurfaceDomain, o: SurfaceScatter): { p: Floa
       const o9 = f * 9, w0 = 1 - u - w
       const nx = w0 * N[o9] + u * N[o9 + 3] + w * N[o9 + 6], ny = w0 * N[o9 + 1] + u * N[o9 + 4] + w * N[o9 + 7], nz = w0 * N[o9 + 2] + u * N[o9 + 5] + w * N[o9 + 8]
       const L = Math.hypot(nx, ny, nz) || 1
+      if (dom.isByBed(f, z, clear) || dom.isCramped(f, x, y, z, nx / L, ny / L, nz / L)) continue
       return [x, y, z, nx / L, ny / L, nz / L]
     }
     return null

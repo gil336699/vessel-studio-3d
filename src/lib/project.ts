@@ -65,7 +65,7 @@ function rootList(raw: unknown): RootRequest[] {
   return raw.map(r => {
     const q = r as Record<string, unknown>
     const system = isNum(q.system) ? Math.max(0, Math.min(2, Math.round(q.system))) : 0
-    if (q.kind === 'skin' && isVec(q.point) && isVec(q.normal)) return { kind: 'skin', point: q.point as [number, number, number], normal: q.normal as [number, number, number], system }
+    if (q.kind === 'skin' && isVec(q.point) && isVec(q.normal)) return { kind: 'skin', point: q.point as [number, number, number], normal: q.normal as [number, number, number], system, ...(q.near === true ? { near: true } : {}) }
     if (q.kind === 'inside' && isVec(q.point)) return { kind: 'inside', point: q.point as [number, number, number], system }
     if (q.kind === 'rim' && isNum(q.count)) return { kind: 'rim', count: Math.max(1, Math.min(64, Math.round(q.count))), systems: isNum(q.systems) ? Math.max(1, Math.min(3, Math.round(q.systems))) : 1 }
     if (q.kind === 'auto') return { kind: 'auto', system, systems: isNum(q.systems) ? Math.max(1, Math.min(3, Math.round(q.systems))) : 1 }

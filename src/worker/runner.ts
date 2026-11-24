@@ -11,9 +11,11 @@ import { buildSdf, InsideDomain, InsideError, scatterInside, type InsidePlacemen
 import { scatterSurface, SurfaceDomain, type SurfacePlacement } from '../veins/surface'
 
 // A root to place: a click on the skin, a point inside, roots spread along the open rim, or one wherever the model
-// suits best (auto): its deepest point inside, or on the surface the point farthest from its rims, or its top.
+// suits best (auto): its deepest point inside, or on the surface the point farthest from its rims, or its top. `near`
+// marks a model's own spot rather than a click: where veins can't start there (on the underside a closed model stands
+// on), the root goes to the nearest skin where they can.
 export type RootRequest =
-  | { kind: 'skin'; point: Vec3; normal: Vec3; system: number }
+  | { kind: 'skin'; point: Vec3; normal: Vec3; system: number; near?: boolean }
   | { kind: 'inside'; point: Vec3; system: number }
   | { kind: 'rim'; count: number; systems: number }
   | { kind: 'auto'; system: number; systems: number }
@@ -108,6 +110,16 @@ export function createRunner(post: (message: FromRunner, transfer: Transferable[
   let used: number[] = []
   let dirty = false, inFlight = false
   let rateSteps = 0, rateStart = 0, rate = 0
+  // Growth settings sent since the engine last took them: a slider sends one for each tick as it moves, and some
+  // changes make the engine search all its veins again, so only the latest is taken, before anything that needs it.
+  let pendingParams: GrowthParams | null = null
+  function takeParams() {
+    if (!pendingParams || !engine) return
+    engine.setParams(pendingParams)
+    pendingParams = null
+    dirty = true
+    flush()
+  }
 
   function frame(): [Frame, Transferable[]] {
     const e = engine!
@@ -144,6 +156,7 @@ export function createRunner(post: (message: FromRunner, transfer: Transferable[
   function batch() {
     const current = run, e = engine
     if (!current || !e) return
+    takeParams()
     const started = now()
     const since = lastBatch ? Math.min(1000, started - lastBatch) : BATCH_MS
     lastBatch = started
@@ -231,10 +244,18 @@ export function createRunner(post: (message: FromRunner, transfer: Transferable[
           const root = d.autoRoot(r.system, r.systems, clear)
           if (root) added.push({ ...root, system: r.system })
           else refused = 'No spot on this model is clear of its rims for a root. Try a smaller edge clearance.'
-        } else if (d.onUnderside(r.point[0], r.point[1], r.point[2])) {
-          refused = 'That spot is on the underside the model stands on. Veins stay off it, so the model sits flat when it’s printed.'
         } else {
-          const root = d.root(r.point, clear)
+          let point = r.point
+          const under = d.onUnderside(point[0], point[1], point[2])
+          if (under || d.nearBed(point[0], point[1], point[2], clear)) {
+            if (!(r.kind === 'skin' && r.near)) {
+              refused = under ? 'That spot is too close above the bed, or above a part below it. Veins stay off it, so the model sits flat when it’s printed.'
+                : 'That spot is nearer the bed than the edge clearance: a vein there would reach below the model. Try higher up, or a smaller clearance.'
+              continue
+            }
+            point = d.nearestAllowed(point, clear) ?? point
+          }
+          const root = d.root(point, clear)
           if (root) added.push({ ...root, system: r.system })
           else refused = 'That spot is nearer the rim than the edge clearance. Try further from the rim, or a smaller clearance.'
         }
@@ -245,6 +266,7 @@ export function createRunner(post: (message: FromRunner, transfer: Transferable[
 
   function load(l: Load) {
     if (run) { clearTimeout(run.timer); run = null }
+    pendingParams = null
     gen = l.gen
     if (l.mesh) { mesh = l.mesh; meshKey = l.meshKey }
     if (!mesh || meshKey !== l.meshKey) { post({ kind: 'failed', gen, message: 'The model didn’t reach the growth worker. Open it again.' }, []); return }
@@ -268,6 +290,9 @@ export function createRunner(post: (message: FromRunner, transfer: Transferable[
     const a = placed.attractors
     post({ kind: 'ready', gen, attractors: { p: a.p.slice(), n: a.n ? a.n.slice() : null, sys: a.sys ? a.sys.slice() : null }, info: info!, short: placed.short, placedFor: placed.key }, [])
     if (!l.state) addRoots(l.requests, false)
+    // Veins that came with the state still need one frame, for the counts the page doesn't keep with them: the free
+    // tips, and the attractors on a part with no root.
+    else { dirty = true; flush() }
   }
 
   function addRoots(requests: RootRequest[], live: boolean) {
@@ -286,8 +311,13 @@ export function createRunner(post: (message: FromRunner, transfer: Transferable[
     }
     const e = engine
     if (!e) return
+    if (message.kind === 'params') {
+      if (!pendingParams) setTimeout(guarded(takeParams), 0)
+      pendingParams = message.params
+      return
+    }
+    takeParams()
     switch (message.kind) {
-      case 'params': e.setParams(message.params); dirty = true; flush(); return
       case 'speed': if (run) run.perBatch = Math.max(1, message.perBatch); return
       case 'play':
         if (run) clearTimeout(run.timer)
